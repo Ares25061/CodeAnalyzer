@@ -1,0 +1,10 @@
+.vs/
+.vscode/
+CodeAnalyzer/CodeAnalyzerAPI/bin/
+CodeAnalyzer/CodeAnalyzerWEB/bin/
+CodeAnalyzer/CodeAnalyzerAPI/obj/
+CodeAnalyzer/CodeAnalyzerWEB/obj/
+CodeAnalyzer/CodeAnalyzerAPI/appsettings.json
+CodeAnalyzer/CodeAnalyzerWEB/appsettings.json
+appsettings.json
+appsettings.*.json

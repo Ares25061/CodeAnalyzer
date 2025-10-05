@@ -1,0 +1,318 @@
+﻿@page "/"
+@using System.Net.Http
+@using System.Text.Json
+@inject IJSRuntime JSRuntime
+
+<div class="analyzer-page">
+    <div class="container analyzer-container">
+        <div class="analyzer-header">
+            <div class="header-title">
+                <h3>Анализатор кода</h3>
+            </div>
+            <button class="clear-history-btn" @onclick="ClearAnalysisHistory" title="Очистить историю">
+                <i class="bi bi-trash"></i>
+            </button>
+        </div>
+        <div class="input-form">
+            <label>Путь к папке:</label>
+            <input @bind="folderPath" placeholder="Введите путь к папке..." />
+            <label>Промпт для анализа:</label>
+            <textarea @bind="prompt" placeholder="Введите промпт..." rows="4"></textarea>
+            <label>Расширения файлов (через запятую):</label>
+            <input @bind="extensionsInput" placeholder=".cs,.js,.py,.txt,.md" />
+        </div>
+        <ul class="analysis-history">
+            @foreach (var message in analysisHistory)
+            {
+                <li class="@(message.StartsWith("Запрос: ") ? "user-message" : "bot-message")">
+                    @foreach (var line in message.Split('\n'))
+                    {
+                        <p>@line</p>
+                    }
+                </li>
+            }
+        </ul>
+        <div class="input-container">
+            <button @onclick="StartAnalysis" disabled="@(isAnalyzing)">Анализировать</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<string> analysisHistory = new List<string>();
+    private string folderPath = string.Empty;
+    private string prompt = string.Empty;
+    private string extensionsInput = ".cs";
+    private bool isAnalyzing = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAnalysisHistory();
+    }
+
+    private async Task LoadAnalysisHistory()
+    {
+        try
+        {
+            var historyJson = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "AnalysisHistory");
+            if (!string.IsNullOrEmpty(historyJson))
+            {
+                analysisHistory = JsonSerializer.Deserialize<List<string>>(historyJson);
+            }
+            else
+            {
+                analysisHistory.Add("Анализатор: Введите путь к папке, промпт и расширения для анализа.");
+                await SaveAnalysisHistory();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Ошибка при загрузке истории анализа: " + ex.Message);
+            analysisHistory.Add("Анализатор: Ошибка при загрузке истории: " + ex.Message);
+            await SaveAnalysisHistory();
+        }
+    }
+
+    private async Task SaveAnalysisHistory()
+    {
+        try
+        {
+            var historyJson = JsonSerializer.Serialize(analysisHistory);
+            await JSRuntime.InvokeVoidAsync("localStorage.setItem", "AnalysisHistory", historyJson);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Ошибка при сохранении истории анализа: " + ex.Message);
+        }
+    }
+
+    private async Task ClearAnalysisHistory()
+    {
+        analysisHistory.Clear();
+        analysisHistory.Add("Анализатор: Введите путь к папке, промпт и расширения для анализа.");
+        await SaveAnalysisHistory();
+        StateHasChanged();
+    }
+
+    private async Task StartAnalysis()
+    {
+        if (string.IsNullOrWhiteSpace(folderPath) || string.IsNullOrWhiteSpace(prompt))
+            return;
+
+        isAnalyzing = true;
+        analysisHistory.Add($"Запрос: Папка - {folderPath}, Промпт - {prompt}, Расширения - {extensionsInput}");
+        var extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList();
+        await SaveAnalysisHistory();
+        StateHasChanged();
+
+        try
+        {
+            var request = new
+            {
+                FolderPath = folderPath,
+                Prompt = prompt,
+                Extensions = extensions
+            };
+
+            await JSRuntime.InvokeVoidAsync("startEventSource", "https://localhost:7131/api/codeanalyzer/analyze", request, DotNetObjectReference.Create(this));
+        }
+        catch (Exception ex)
+        {
+            analysisHistory.Add($"Анализатор: Ошибка: {ex.Message}");
+            await SaveAnalysisHistory();
+            isAnalyzing = false;
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnMessageReceived(string message)
+    {
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            analysisHistory.Add($"Анализатор: {message}");
+            await SaveAnalysisHistory();
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void OnStreamClosed()
+    {
+        isAnalyzing = false;
+        StateHasChanged();
+    }
+}
+
+<style>
+    body {
+        background: #f4f4f9;
+        color: #333;
+        font-family: 'Segoe UI', Arial, sans-serif;
+    }
+
+    .analyzer-page {
+        padding-top: 20px;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .analyzer-container {
+        max-width: 900px;
+        background: #fff;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .analyzer-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .header-title {
+        flex-grow: 1;
+        text-align: center;
+    }
+
+    h3 {
+        color: #007bff;
+        margin: 0;
+    }
+
+    .input-form {
+        margin-bottom: 20px;
+    }
+
+        .input-form label {
+            display: block;
+            color: #555;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .input-form input,
+        .input-form textarea {
+            width: 100%;
+            background: #f8f9fa;
+            color: #333;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            font-size: 14px;
+            margin-bottom: 15px;
+            resize: vertical;
+        }
+
+            .input-form input::placeholder,
+            .input-form textarea::placeholder {
+                color: #999;
+            }
+
+    .clear-history-btn {
+        background: #dc3545;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        padding: 8px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background 0.3s;
+    }
+
+        .clear-history-btn:hover {
+            background: #c82333;
+        }
+
+    .analysis-history {
+        list-style-type: none;
+        padding: 0;
+        max-height: 400px;
+        overflow-y: auto;
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 20px;
+        border: 1px solid #e9ecef;
+    }
+
+        .analysis-history li {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+            word-wrap: break-word;
+        }
+
+    .user-message {
+        background: #e9ecef;
+        text-align: right;
+        color: #333;
+    }
+
+    .bot-message {
+        background: #e7f3ff;
+        text-align: left;
+        color: #333;
+    }
+
+    .input-container {
+        display: flex;
+        justify-content: center;
+    }
+
+    button {
+        background: #007bff;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        padding: 10px 20px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: background 0.3s;
+    }
+
+        button:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+</style>
+
+<script>
+    window.startEventSource = async (url, requestData, dotnetObj) => {
+        console.log("Запуск EventSource для URL:", url, "с данными:", requestData);
+        const response = await fetch(url, {
+            method: "POST",
+            body: JSON.stringify(requestData),
+            headers: { "Content-Type": "application/json" }
+        });
+        console.log("Статус ответа:", response.status);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                console.log("Поток закрыт");
+                dotnetObj.invokeMethodAsync('OnStreamClosed');
+                break;
+            }
+            const chunk = decoder.decode(value);
+            console.log("Получен чанк:", chunk);
+            const lines = chunk.split('\n\n');
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const message = line.substring(6).trim();
+                    console.log("Отправка сообщения в Blazor:", message);
+                    dotnetObj.invokeMethodAsync('OnMessageReceived', message);
+                }
+            }
+        }
+    };
+</script>
