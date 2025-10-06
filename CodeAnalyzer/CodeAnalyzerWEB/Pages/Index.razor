@@ -1,7 +1,9 @@
 ﻿@page "/"
 @using System.Net.Http
 @using System.Text.Json
+@using System.Text.RegularExpressions
 @inject IJSRuntime JSRuntime
+@inject HttpClient Http
 
 <div class="analyzer-page">
     <div class="container analyzer-container">
@@ -21,28 +23,72 @@
             <label>Расширения файлов (через запятую):</label>
             <input @bind="extensionsInput" placeholder=".cs,.js,.py,.txt,.md" />
         </div>
+
+        <!-- Статус анализа -->
+        <div class="analysis-status">
+            @if (isAnalyzing)
+            {
+                <div class="status-info">
+                    <div class="spinner"></div>
+                    <span>Анализ выполняется...</span>
+                </div>
+            }
+        </div>
+
         <ul class="analysis-history">
             @foreach (var message in analysisHistory)
             {
-                <li class="@(message.StartsWith("Запрос: ") ? "user-message" : "bot-message")">
-                    @foreach (var line in message.Split('\n'))
+                <li class="@(message.Type == MessageType.User ? "user-message" : "bot-message")">
+                    @if (message.Type == MessageType.User)
                     {
-                        <p>@line</p>
+                        <div class="message-header">
+                            <strong>Запрос:</strong>
+                        </div>
+                        <div class="message-content">
+                            @foreach (var line in message.Text.Split('\n'))
+                            {
+                                <p>@line</p>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="message-content formatted-content">
+                            @if (!string.IsNullOrEmpty(message.Text))
+                            {
+                                @((MarkupString)FormatMarkdown(message.Text))
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(message.Timestamp))
+                    {
+                        <div class="message-timestamp">
+                            <small>@message.Timestamp</small>
+                        </div>
                     }
                 </li>
             }
         </ul>
         <div class="input-container">
-            <button @onclick="StartAnalysis" disabled="@(isAnalyzing)">Анализировать</button>
+            <button @onclick="StartAnalysis" disabled="@(isAnalyzing)">
+                @if (isAnalyzing)
+                {
+                    <span>Анализируется...</span>
+                }
+                else
+                {
+                    <span>Анализировать</span>
+                }
+            </button>
         </div>
     </div>
 </div>
 
 @code {
-    private List<string> analysisHistory = new List<string>();
+    private List<AnalysisMessage> analysisHistory = new List<AnalysisMessage>();
     private string folderPath = string.Empty;
     private string prompt = string.Empty;
-    private string extensionsInput = ".cs";
+    private string extensionsInput = ".cs,.js,.py,.txt,.md";
     private bool isAnalyzing = false;
 
     protected override async Task OnInitializedAsync()
@@ -57,18 +103,26 @@
             var historyJson = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "AnalysisHistory");
             if (!string.IsNullOrEmpty(historyJson))
             {
-                analysisHistory = JsonSerializer.Deserialize<List<string>>(historyJson);
+                analysisHistory = JsonSerializer.Deserialize<List<AnalysisMessage>>(historyJson);
             }
             else
             {
-                analysisHistory.Add("Анализатор: Введите путь к папке, промпт и расширения для анализа.");
+                analysisHistory.Add(new AnalysisMessage
+                    {
+                        Text = "Введите путь к папке, промпт и расширения для анализа.",
+                        Type = MessageType.Bot
+                    });
                 await SaveAnalysisHistory();
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine("Ошибка при загрузке истории анализа: " + ex.Message);
-            analysisHistory.Add("Анализатор: Ошибка при загрузке истории: " + ex.Message);
+            analysisHistory.Add(new AnalysisMessage
+                {
+                    Text = "Ошибка при загрузке истории: " + ex.Message,
+                    Type = MessageType.Bot
+                });
             await SaveAnalysisHistory();
         }
     }
@@ -89,7 +143,11 @@
     private async Task ClearAnalysisHistory()
     {
         analysisHistory.Clear();
-        analysisHistory.Add("Анализатор: Введите путь к папке, промпт и расширения для анализа.");
+        analysisHistory.Add(new AnalysisMessage
+            {
+                Text = "Введите путь к папке, промпт и расширения для анализа.",
+                Type = MessageType.Bot
+            });
         await SaveAnalysisHistory();
         StateHasChanged();
     }
@@ -100,7 +158,14 @@
             return;
 
         isAnalyzing = true;
-        analysisHistory.Add($"Запрос: Папка - {folderPath}, Промпт - {prompt}, Расширения - {extensionsInput}");
+
+        analysisHistory.Add(new AnalysisMessage
+            {
+                Text = $"Папка: {folderPath}\nПромпт: {prompt}\nРасширения: {extensionsInput}",
+                Type = MessageType.User,
+                Timestamp = DateTime.Now.ToString("HH:mm:ss")
+            });
+
         var extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList();
         await SaveAnalysisHistory();
         StateHasChanged();
@@ -114,33 +179,147 @@
                 Extensions = extensions
             };
 
-            await JSRuntime.InvokeVoidAsync("startEventSource", "https://localhost:7131/api/codeanalyzer/analyze", request, DotNetObjectReference.Create(this));
+            var response = await Http.PostAsJsonAsync("https://localhost:7131/api/codeanalyzer/analyze", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<AnalysisResponse>();
+                if (result != null && result.Success)
+                {
+                    analysisHistory.Add(new AnalysisMessage
+                        {
+                            Text = result.Result ?? "Анализ завершен без результата",
+                            Type = MessageType.Bot,
+                            Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                        });
+                }
+                else
+                {
+                    analysisHistory.Add(new AnalysisMessage
+                        {
+                            Text = "Ошибка: Не удалось получить результат анализа",
+                            Type = MessageType.Bot
+                        });
+                }
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                analysisHistory.Add(new AnalysisMessage
+                    {
+                        Text = $"Ошибка сервера: {response.StatusCode} - {errorContent}",
+                        Type = MessageType.Bot
+                    });
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            analysisHistory.Add(new AnalysisMessage
+                {
+                    Text = $"Ошибка сети: {ex.Message}",
+                    Type = MessageType.Bot
+                });
         }
         catch (Exception ex)
         {
-            analysisHistory.Add($"Анализатор: Ошибка: {ex.Message}");
-            await SaveAnalysisHistory();
-            isAnalyzing = false;
-            StateHasChanged();
+            analysisHistory.Add(new AnalysisMessage
+                {
+                    Text = $"Ошибка: {ex.Message}",
+                    Type = MessageType.Bot
+                });
         }
-    }
-
-    [JSInvokable]
-    public async Task OnMessageReceived(string message)
-    {
-        if (!string.IsNullOrWhiteSpace(message))
+        finally
         {
-            analysisHistory.Add($"Анализатор: {message}");
+            isAnalyzing = false;
             await SaveAnalysisHistory();
             StateHasChanged();
         }
     }
 
-    [JSInvokable]
-    public void OnStreamClosed()
+    private string FormatMarkdown(string markdownText)
     {
-        isAnalyzing = false;
-        StateHasChanged();
+        if (string.IsNullOrEmpty(markdownText))
+            return string.Empty;
+
+        // Обработка заголовков
+        var formatted = Regex.Replace(markdownText, @"^###\s+(.+)$", "<h3>$1</h3>", RegexOptions.Multiline);
+        formatted = Regex.Replace(formatted, @"^##\s+(.+)$", "<h2>$1</h2>", RegexOptions.Multiline);
+        formatted = Regex.Replace(formatted, @"^#\s+(.+)$", "<h1>$1</h1>", RegexOptions.Multiline);
+
+        // Обработка жирного текста
+        formatted = Regex.Replace(formatted, @"\*\*(.*?)\*\*", "<strong>$1</strong>");
+        formatted = Regex.Replace(formatted, @"__(.*?)__", "<strong>$1</strong>");
+
+        // Обработка курсива
+        formatted = Regex.Replace(formatted, @"\*(.*?)\*", "<em>$1</em>");
+        formatted = Regex.Replace(formatted, @"_(.*?)_", "<em>$1</em>");
+
+        // Обработка списков
+        formatted = Regex.Replace(formatted, @"^\-\s+(.+)$", "<li>$1</li>", RegexOptions.Multiline);
+        formatted = Regex.Replace(formatted, @"^\*\s+(.+)$", "<li>$1</li>", RegexOptions.Multiline);
+
+        // Группировка элементов списка в ul
+        formatted = Regex.Replace(formatted, @"(<li>.*</li>\s*)+", "<ul>$0</ul>");
+
+        // Обработка нумерованных списков
+        formatted = Regex.Replace(formatted, @"^\d+\.\s+(.+)$", "<li>$1</li>", RegexOptions.Multiline);
+        formatted = Regex.Replace(formatted, @"(<li>.*</li>\s*)+", match =>
+        {
+            var items = match.Value;
+            if (Regex.IsMatch(items, @"^\d+\."))
+                return "<ol>" + items + "</ol>";
+            else
+                return "<ul>" + items + "</ul>";
+        });
+
+        // Обработка блоков кода
+        formatted = Regex.Replace(formatted, @"```(\w+)?\s*(.*?)```", "<pre><code>$2</code></pre>", RegexOptions.Singleline);
+        formatted = Regex.Replace(formatted, @"`(.+?)`", "<code>$1</code>");
+
+        // Обработка разделителей
+        formatted = Regex.Replace(formatted, @"^\s*---\s*$", "<hr />", RegexOptions.Multiline);
+
+        // Обработка ссылок
+        formatted = Regex.Replace(formatted, @"\[([^\]]+)\]\(([^)]+)\)", "<a href=\"$2\">$1</a>");
+
+        // Обработка переносов строк (замена на <br>)
+        formatted = Regex.Replace(formatted, @"\n", "<br />");
+
+        // Обработка эмодзи и специальных символов
+        formatted = Regex.Replace(formatted, @"📊", "<span class=\"emoji\">📊</span>");
+        formatted = Regex.Replace(formatted, @"🛠️", "<span class=\"emoji\">🛠️</span>");
+        formatted = Regex.Replace(formatted, @"🔹", "<span class=\"emoji\">🔹</span>");
+        formatted = Regex.Replace(formatted, @"🎯", "<span class=\"emoji\">🎯</span>");
+        formatted = Regex.Replace(formatted, @"📄", "<span class=\"emoji\">📄</span>");
+        formatted = Regex.Replace(formatted, @"📋", "<span class=\"emoji\">📋</span>");
+        formatted = Regex.Replace(formatted, @"📈", "<span class=\"emoji\">📈</span>");
+        formatted = Regex.Replace(formatted, @"🔍", "<span class=\"emoji\">🔍</span>");
+        formatted = Regex.Replace(formatted, @"🧠", "<span class=\"emoji\">🧠</span>");
+        formatted = Regex.Replace(formatted, @"🔄", "<span class=\"emoji\">🔄</span>");
+        formatted = Regex.Replace(formatted, @"❌", "<span class=\"emoji error\">❌</span>");
+        formatted = Regex.Replace(formatted, @"✅", "<span class=\"emoji success\">✅</span>");
+
+        return formatted;
+    }
+
+    public class AnalysisMessage
+    {
+        public string Text { get; set; } = string.Empty;
+        public MessageType Type { get; set; }
+        public string Timestamp { get; set; } = string.Empty;
+    }
+
+    public class AnalysisResponse
+    {
+        public bool Success { get; set; }
+        public string Result { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
+    }
+
+    public enum MessageType
+    {
+        User,
+        Bot
     }
 }
 
@@ -149,6 +328,7 @@
         background: #f4f4f9;
         color: #333;
         font-family: 'Segoe UI', Arial, sans-serif;
+        line-height: 1.6;
     }
 
     .analyzer-page {
@@ -156,7 +336,7 @@
         min-height: 100vh;
         display: flex;
         justify-content: center;
-        align-items: center;
+        align-items: flex-start;
     }
 
     .analyzer-container {
@@ -228,10 +408,35 @@
             background: #c82333;
         }
 
+    /* Стили для статуса анализа */
+    .analysis-status {
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        border: 1px solid #e9ecef;
+    }
+
+    .status-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+
+    .spinner {
+        width: 20px;
+        height: 20px;
+        border: 2px solid #f3f3f3;
+        border-top: 2px solid #007bff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
     .analysis-history {
         list-style-type: none;
         padding: 0;
-        max-height: 400px;
+        max-height: 600px;
         overflow-y: auto;
         background: #f8f9fa;
         border-radius: 8px;
@@ -241,22 +446,143 @@
     }
 
         .analysis-history li {
-            margin: 10px 0;
-            padding: 10px;
-            border-radius: 5px;
+            margin: 15px 0;
+            padding: 20px;
+            border-radius: 8px;
             word-wrap: break-word;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
 
     .user-message {
         background: #e9ecef;
-        text-align: right;
+        text-align: left;
         color: #333;
+        border-left: 4px solid #007bff;
     }
 
     .bot-message {
         background: #e7f3ff;
         text-align: left;
         color: #333;
+        border-left: 4px solid #28a745;
+    }
+
+    .message-header {
+        margin-bottom: 12px;
+        font-weight: bold;
+        color: #007bff;
+    }
+
+    .message-content {
+        line-height: 1.6;
+    }
+
+    .formatted-content {
+        font-size: 14px;
+    }
+
+        .formatted-content h1 {
+            color: #2c3e50;
+            font-size: 1.5em;
+            margin: 20px 0 15px 0;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #3498db;
+        }
+
+        .formatted-content h2 {
+            color: #34495e;
+            font-size: 1.3em;
+            margin: 18px 0 12px 0;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #bdc3c7;
+        }
+
+        .formatted-content h3 {
+            color: #2c3e50;
+            font-size: 1.1em;
+            margin: 15px 0 10px 0;
+        }
+
+        .formatted-content strong {
+            color: #2c3e50;
+            font-weight: 600;
+        }
+
+        .formatted-content em {
+            color: #7f8c8d;
+            font-style: italic;
+        }
+
+        .formatted-content ul,
+        .formatted-content ol {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+
+        .formatted-content li {
+            margin: 5px 0;
+            padding-left: 5px;
+        }
+
+        .formatted-content pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+        }
+
+        .formatted-content code {
+            background: #edf2f7;
+            color: #2d3748;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+        }
+
+        .formatted-content pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+
+        .formatted-content hr {
+            border: none;
+            border-top: 2px solid #bdc3c7;
+            margin: 20px 0;
+        }
+
+        .formatted-content a {
+            color: #3498db;
+            text-decoration: none;
+        }
+
+            .formatted-content a:hover {
+                text-decoration: underline;
+            }
+
+    .emoji {
+        font-size: 1.1em;
+        margin: 0 2px;
+    }
+
+        .emoji.error {
+            color: #e74c3c;
+        }
+
+        .emoji.success {
+            color: #27ae60;
+        }
+
+    .message-timestamp {
+        margin-top: 12px;
+        text-align: right;
+        color: #666;
+        font-size: 12px;
     }
 
     .input-container {
@@ -269,10 +595,12 @@
         color: #fff;
         border: none;
         border-radius: 5px;
-        padding: 10px 20px;
+        padding: 12px 24px;
         font-weight: bold;
         cursor: pointer;
         transition: background 0.3s;
+        min-width: 120px;
+        font-size: 14px;
     }
 
         button:hover:not(:disabled) {
@@ -283,36 +611,33 @@
             background: #6c757d;
             cursor: not-allowed;
         }
-</style>
 
-<script>
-    window.startEventSource = async (url, requestData, dotnetObj) => {
-        console.log("Запуск EventSource для URL:", url, "с данными:", requestData);
-        const response = await fetch(url, {
-            method: "POST",
-            body: JSON.stringify(requestData),
-            headers: { "Content-Type": "application/json" }
-        });
-        console.log("Статус ответа:", response.status);
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-                console.log("Поток закрыт");
-                dotnetObj.invokeMethodAsync('OnStreamClosed');
-                break;
-            }
-            const chunk = decoder.decode(value);
-            console.log("Получен чанк:", chunk);
-            const lines = chunk.split('\n\n');
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const message = line.substring(6).trim();
-                    console.log("Отправка сообщения в Blazor:", message);
-                    dotnetObj.invokeMethodAsync('OnMessageReceived', message);
-                }
-            }
+    @@keyframes spin {
+        0% {
+            transform: rotate(0deg);
         }
-    };
-</script>
+
+        100% {
+            transform: rotate(360deg);
+        }
+    }
+
+    /* Стили для скроллбара */
+    .analysis-history::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .analysis-history::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 4px;
+    }
+
+    .analysis-history::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 4px;
+    }
+
+        .analysis-history::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+</style>

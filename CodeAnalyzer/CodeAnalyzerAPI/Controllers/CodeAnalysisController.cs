@@ -25,7 +25,7 @@ namespace MarketplaceApi.Controllers
         }
 
         [HttpPost("analyze")]
-        public async Task Analyze([FromBody] AnalyzeRequest request)
+        public async Task<IActionResult> Analyze([FromBody] AnalyzeRequest request)
         {
             _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Промпт={Prompt}, Расширения={Extensions}",
                 request.FolderPath, request.Prompt, string.Join(", ", request.Extensions ?? new List<string>()));
@@ -33,34 +33,27 @@ namespace MarketplaceApi.Controllers
             if (string.IsNullOrWhiteSpace(request.FolderPath) || string.IsNullOrWhiteSpace(request.Prompt))
             {
                 _logger.LogWarning("Недействительный запрос: Путь к папке или промпт пусты.");
-                Response.StatusCode = 400;
-                await Response.WriteAsync("Ошибка: путь к папке и промпт обязательны.");
-                return;
+                return BadRequest("Ошибка: путь к папке и промпт обязательны.");
             }
 
             _logger.LogInformation("Инициализация CodeAnalyzer...");
             var analyzer = new CodeAnalyzer(_ollama, _logger);
 
-            _logger.LogDebug("Установка заголовков ответа для SSE...");
-            Response.Headers.Add("Content-Type", "text/event-stream");
-            Response.Headers.Add("Cache-Control", "no-cache");
-            Response.Headers.Add("Connection", "keep-alive");
-
             try
             {
                 _logger.LogInformation("Начало анализа для папки: {FolderPath}", request.FolderPath);
-                await analyzer.AnalyzeWithFullAccessAsync(
+                var result = await analyzer.AnalyzeWithFullAccessAsync(
                     request.FolderPath,
                     request.Prompt,
-                    request.Extensions ?? new List<string> { ".cs", ".js", ".py", ".txt", ".md" },
-                    Response);
+                    request.Extensions ?? new List<string> { ".cs", ".js", ".py", ".txt", ".md" });
+
                 _logger.LogInformation("Анализ успешно завершен.");
+                return Ok(new { success = true, result = result });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Ошибка при анализе папки: {FolderPath}. Подробности: {Message}", request.FolderPath, ex.Message);
-                await Response.WriteAsync($"data: ❌ Ошибка: {ex.Message}\n\n");
-                await Response.Body.FlushAsync();
+                return StatusCode(500, new { success = false, error = ex.Message });
             }
         }
     }
@@ -141,7 +134,7 @@ namespace MarketplaceApi.Controllers
             }
         }
 
-        public async Task AnalyzeWithFullAccessAsync(string folderPath, string userPrompt, List<string> fileExtensions, HttpResponse response)
+        public async Task<string> AnalyzeWithFullAccessAsync(string folderPath, string userPrompt, List<string> fileExtensions)
         {
             _logger.LogInformation("Начало AnalyzeWithFullAccessAsync: Путь={FolderPath}, Промпт={Prompt}, Расширения={Extensions}",
                 folderPath, userPrompt, string.Join(", ", fileExtensions));
@@ -152,34 +145,30 @@ namespace MarketplaceApi.Controllers
             {
                 string errorMessage = filesContent.GetValueOrDefault("error", "Файлы не найдены");
                 _logger.LogWarning("Файлы не найдены или произошла ошибка: {ErrorMessage}", errorMessage);
-                await StreamMessageAsync(response, $"❌ Ошибка: {errorMessage}\n\n");
-                return;
+                return $"❌ Ошибка: {errorMessage}";
             }
 
-            await StreamMessageAsync(response, $"📊 Найдено файлов: {filesContent.Count}\n\n");
-            await StreamMessageAsync(response, $"🛠️ Обработано файлов: {filesContent.Count}\n\n");
             _logger.LogInformation("Найдено и обработано {FileCount} файлов для анализа.", filesContent.Count);
 
             string result;
             if (filesContent.Count <= 5)
             {
                 _logger.LogInformation("Анализ небольшого набора из {FileCount} файлов.", filesContent.Count);
-                result = await AnalyzeSmallBatchAsync(filesContent, userPrompt, response);
+                result = await AnalyzeSmallBatchAsync(filesContent, userPrompt);
             }
             else
             {
                 _logger.LogInformation("Анализ большой кодовой базы с {FileCount} файлами.", filesContent.Count);
-                result = await AnalyzeLargeCodebaseAsync(filesContent, userPrompt, response);
+                result = await AnalyzeLargeCodebaseAsync(filesContent, userPrompt);
             }
 
-            await StreamMessageAsync(response, $"\n📊 ИТОГОВЫЙ РЕЗУЛЬТАТ\n{result}\n\n");
             _logger.LogInformation("Анализ завершен, длина результата: {ResultLength}", result.Length);
+            return result;
         }
 
-        private async Task<string> AnalyzeSmallBatchAsync(Dictionary<string, string> filesContent, string userPrompt, HttpResponse response)
+        private async Task<string> AnalyzeSmallBatchAsync(Dictionary<string, string> filesContent, string userPrompt)
         {
             _logger.LogInformation("Начало AnalyzeSmallBatchAsync с {FileCount} файлами.", filesContent.Count);
-            await StreamMessageAsync(response, "🔄 Анализируем все файлы вместе...\n\n");
 
             var filesContext = new StringBuilder("ПОЛНОЕ СОДЕРЖИМОЕ ВСЕХ ФАЙЛОВ:\n\n");
             foreach (var kvp in filesContent)
@@ -200,35 +189,30 @@ namespace MarketplaceApi.Controllers
 """;
 
             _logger.LogDebug("Сгенерирован промпт для анализа небольшого набора, длина: {PromptLength}", prompt.Length);
-            return await AskOllamaAsync(prompt, 8000, response);
+            return await AskOllamaAsync(prompt, 8000);
         }
 
-        private async Task<string> AnalyzeLargeCodebaseAsync(Dictionary<string, string> filesContent, string userPrompt, HttpResponse response)
+        private async Task<string> AnalyzeLargeCodebaseAsync(Dictionary<string, string> filesContent, string userPrompt)
         {
             _logger.LogInformation("Начало AnalyzeLargeCodebaseAsync с {FileCount} файлами.", filesContent.Count);
-            await StreamMessageAsync(response, "🔄 Используем поэтапный анализ для большой кодобазы...\n\n");
 
-            await StreamMessageAsync(response, "1. 📋 Анализируем структуру файлов...\n\n");
             _logger.LogDebug("Начало анализа структуры...");
-            string structureAnalysis = await AnalyzeStructureAsync(filesContent, userPrompt, response);
+            string structureAnalysis = await AnalyzeStructureAsync(filesContent, userPrompt);
 
-            await StreamMessageAsync(response, "2. 🎯 Анализируем содержимое групп файлов...\n\n");
             _logger.LogDebug("Начало анализа содержимого групп...");
-            string contentAnalysis = await AnalyzeByGroupsAsync(filesContent, userPrompt, response);
+            string contentAnalysis = await AnalyzeByGroupsAsync(filesContent, userPrompt);
 
-            await StreamMessageAsync(response, "3. 🔍 Детальный анализ ключевых файлов...\n\n");
             _logger.LogDebug("Начало анализа ключевых файлов...");
-            string detailedAnalysis = await AnalyzeKeyFilesAsync(filesContent, userPrompt, response);
+            string detailedAnalysis = await AnalyzeKeyFilesAsync(filesContent, userPrompt);
 
-            await StreamMessageAsync(response, "4. 🧠 Синтезируем итоговый ответ...\n\n");
             _logger.LogDebug("Начало синтеза результатов...");
-            string finalResult = await SynthesizeResultsAsync(structureAnalysis, contentAnalysis, detailedAnalysis, userPrompt, filesContent.Keys.ToList(), response);
+            string finalResult = await SynthesizeResultsAsync(structureAnalysis, contentAnalysis, detailedAnalysis, userPrompt, filesContent.Keys.ToList());
 
             _logger.LogInformation("Анализ большой кодовой базы завершен.");
             return finalResult;
         }
 
-        private async Task<string> AnalyzeStructureAsync(Dictionary<string, string> filesContent, string userPrompt, HttpResponse response)
+        private async Task<string> AnalyzeStructureAsync(Dictionary<string, string> filesContent, string userPrompt)
         {
             _logger.LogInformation("Анализ структуры для {FileCount} файлов.", filesContent.Count);
             var fileList = string.Join("\n", filesContent.Select(kvp => $"- {kvp.Key} ({kvp.Value.Length} chars)"));
@@ -247,10 +231,10 @@ namespace MarketplaceApi.Controllers
 """;
 
             _logger.LogDebug("Сгенерирован промпт для анализа структуры, длина: {PromptLength}", prompt.Length);
-            return await AskOllamaAsync(prompt, 3000, response);
+            return await AskOllamaAsync(prompt, 3000);
         }
 
-        private async Task<string> AnalyzeByGroupsAsync(Dictionary<string, string> filesContent, string userPrompt, HttpResponse response, int groupSize = 3)
+        private async Task<string> AnalyzeByGroupsAsync(Dictionary<string, string> filesContent, string userPrompt, int groupSize = 3)
         {
             _logger.LogInformation("Начало AnalyzeByGroupsAsync с {FileCount} файлами, размер группы: {GroupSize}.", filesContent.Count, groupSize);
             var fileItems = filesContent.ToList();
@@ -267,7 +251,6 @@ namespace MarketplaceApi.Controllers
             {
                 var group = groups[i];
                 _logger.LogDebug("Обработка группы {GroupIndex}/{GroupCount}", i + 1, groups.Count);
-                await StreamMessageAsync(response, $"   📦 Анализируем группу {i + 1}/{groups.Count}...\n\n");
 
                 var groupContext = new StringBuilder();
                 foreach (var kvp in group)
@@ -289,7 +272,7 @@ namespace MarketplaceApi.Controllers
 """;
 
                 _logger.LogDebug("Сгенерирован промпт для группы {GroupIndex}, длина: {PromptLength}", i + 1, prompt.Length);
-                string result = await AskOllamaAsync(prompt, 4000, response);
+                string result = await AskOllamaAsync(prompt, 4000);
                 groupResults.Add(new Dictionary<string, object>
                 {
                     { "files", group.Select(g => g.Key).ToList() },
@@ -312,10 +295,10 @@ namespace MarketplaceApi.Controllers
 """;
 
             _logger.LogDebug("Сгенерирован промпт для суммирования групп, длина: {PromptLength}", summaryPrompt.Length);
-            return await AskOllamaAsync(summaryPrompt, 4000, response);
+            return await AskOllamaAsync(summaryPrompt, 4000);
         }
 
-        private async Task<string> AnalyzeKeyFilesAsync(Dictionary<string, string> filesContent, string userPrompt, HttpResponse response)
+        private async Task<string> AnalyzeKeyFilesAsync(Dictionary<string, string> filesContent, string userPrompt)
         {
             _logger.LogInformation("Начало AnalyzeKeyFilesAsync...");
             var keyFiles = filesContent.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Length > 6000 ? kvp.Value.Substring(0, 6000) : kvp.Value);
@@ -326,7 +309,6 @@ namespace MarketplaceApi.Controllers
                 return "❌ Ключевые файлы не найдены";
             }
 
-            await StreamMessageAsync(response, $"   🔑 Анализируем {keyFiles.Count} ключевых файлов...\n\n");
             _logger.LogInformation("Найдено {KeyFileCount} ключевых файлов.", keyFiles.Count);
 
             var keyFilesContext = new StringBuilder();
@@ -350,10 +332,10 @@ namespace MarketplaceApi.Controllers
 """;
 
             _logger.LogDebug("Сгенерирован промпт для анализа ключевых файлов, длина: {PromptLength}", prompt.Length);
-            return await AskOllamaAsync(prompt, 6000, response);
+            return await AskOllamaAsync(prompt, 6000);
         }
 
-        private async Task<string> SynthesizeResultsAsync(string structure, string content, string detailed, string question, List<string> allFiles, HttpResponse response)
+        private async Task<string> SynthesizeResultsAsync(string structure, string content, string detailed, string question, List<string> allFiles)
         {
             _logger.LogInformation("Начало SynthesizeResultsAsync...");
             string prompt = $"""
@@ -379,15 +361,13 @@ namespace MarketplaceApi.Controllers
 """;
 
             _logger.LogDebug("Сгенерирован промпт для синтеза результатов, длина: {PromptLength}", prompt.Length);
-            return await AskOllamaAsync(prompt, 5000, response);
+            return await AskOllamaAsync(prompt, 5000);
         }
 
-        private async Task<string> AskOllamaAsync(string prompt, int maxTokens, HttpResponse response)
+        private async Task<string> AskOllamaAsync(string prompt, int maxTokens)
         {
             _logger.LogInformation("Начало AskOllamaAsync с maxTokens: {MaxTokens}", maxTokens);
             _logger.LogDebug("Длина промпта: {PromptLength}", prompt.Length);
-
-            var fullResponse = new StringBuilder();
 
             var requestOptions = new RequestOptions
             {
@@ -400,48 +380,26 @@ namespace MarketplaceApi.Controllers
             try
             {
                 _logger.LogDebug("Отправка запроса к Ollama API с моделью: {Model}", _model);
-                await foreach (var chunk in _client.Completions.GenerateCompletionAsync(
+
+                // Используем нестримируемый запрос для получения полного ответа
+                var response = await _client.Completions.GenerateCompletionAsync(
                     model: _model,
                     prompt: prompt,
-                    stream: true,
-                    options: requestOptions))
-                {
-                    fullResponse.Append(chunk.Response);
-                    await StreamMessageAsync(response, chunk.Response);
-                    _logger.LogDebug("Получен чанк от Ollama, длина: {ChunkLength}", chunk.Response.Length);
-                }
+                    stream: false, // Важно: отключаем стриминг
+                    options: requestOptions);
 
-                await StreamMessageAsync(response, "\n\n");
-                _logger.LogInformation("Вызов Ollama API завершен, общая длина ответа: {ResponseLength}", fullResponse.Length);
+                _logger.LogInformation("Вызов Ollama API завершен, длина ответа: {ResponseLength}", response.Response.Length);
+                return response.Response;
             }
             catch (HttpRequestException ex) when (ex.Message.Contains("SSL"))
             {
                 _logger.LogError(ex, "Ошибка SSL при вызове Ollama API. Проверьте сертификат или URL сервера.");
-                await StreamMessageAsync(response, $"❌ Ошибка SSL: Не удалось установить соединение с Ollama. Проверьте настройки сервера или используйте HTTP вместо HTTPS.\n\n");
-                return $"Ошибка: Не удалось установить соединение с Ollama из-за проблемы SSL.";
+                return $"❌ Ошибка SSL: Не удалось установить соединение с Ollama. Проверьте настройки сервера или используйте HTTP вместо HTTPS.";
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Ошибка при вызове Ollama API: {Message}", ex.Message);
-                await StreamMessageAsync(response, $"❌ Ошибка Ollama: {ex.Message}\n\n");
-                return $"Ошибка: {ex.Message}";
-            }
-
-            return fullResponse.ToString();
-        }
-
-        private async Task StreamMessageAsync(HttpResponse response, string message)
-        {
-            try
-            {
-                await response.WriteAsync($"data: {message}\n\n");
-                await response.Body.FlushAsync();
-                _logger.LogDebug("Отправлено сообщение в поток, длина: {MessageLength}", message.Length);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка при отправке сообщения в поток.");
-                throw;
+                return $"❌ Ошибка Ollama: {ex.Message}";
             }
         }
     }
