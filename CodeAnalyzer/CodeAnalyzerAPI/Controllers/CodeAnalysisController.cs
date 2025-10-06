@@ -30,10 +30,10 @@ namespace MarketplaceApi.Controllers
             _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Промпт={Prompt}, Расширения={Extensions}",
                 request.FolderPath, request.Prompt, string.Join(", ", request.Extensions ?? new List<string>()));
 
-            if (string.IsNullOrWhiteSpace(request.FolderPath) || string.IsNullOrWhiteSpace(request.Prompt))
+            if (string.IsNullOrWhiteSpace(request.FolderPath))
             {
-                _logger.LogWarning("Недействительный запрос: Путь к папке или промпт пусты.");
-                return BadRequest("Ошибка: путь к папке и промпт обязательны.");
+                _logger.LogWarning("Недействительный запрос: Путь к папке пуст.");
+                return BadRequest("Ошибка: путь к папке обязателен.");
             }
 
             _logger.LogInformation("Инициализация CodeAnalyzer...");
@@ -44,7 +44,7 @@ namespace MarketplaceApi.Controllers
                 _logger.LogInformation("Начало анализа для папки: {FolderPath}", request.FolderPath);
                 var result = await analyzer.AnalyzeWithFullAccessAsync(
                     request.FolderPath,
-                    request.Prompt,
+                    request.Prompt ?? "ci/cd",
                     request.Extensions ?? new List<string> { ".cs", ".js", ".py", ".txt", ".md" });
 
                 _logger.LogInformation("Анализ успешно завершен.");
@@ -70,6 +70,15 @@ namespace MarketplaceApi.Controllers
         private readonly OllamaApiClient _client;
         private readonly string _model = "deepseek-v3.1:671b-cloud";
         private readonly ILogger<CodeAnalyzerController> _logger;
+
+        private readonly List<string> _ciCdCriteria = new List<string>
+        {
+            "Количество и качество контроллеров: Подсчитай количество контроллеров, проверь наличие атрибутов ([ApiController], [Route]), обработку ошибок, структуру действий. Pass, если контроллеров >=1 и качество хорошее (присутствует обработка ошибок, атрибуты).",
+            "Наличие подключения к БД: Проверь наличие DbContext, connection strings в конфигурации, вызовов services.AddDbContext. Pass, если подключение к БД настроено правильно.",
+            "Безопасность: Проверь наличие аутентификации/авторизации ([Authorize], services.AddAuthentication). Pass, если присутствуют механизмы безопасности.",
+            "Стиль кода: Проверь наличие комментариев, последовательность именования, отсутствие дубликатов кода. Pass, если код хорошо документирован и следует best practices.",
+            "Общая структура проекта: Оцени общую архитектуру (разделение на слои, использование DI). Pass, если структура логична и масштабируема."
+        };
 
         public CodeAnalyzer(OllamaApiClient client, ILogger<CodeAnalyzerController> logger)
         {
@@ -150,23 +159,25 @@ namespace MarketplaceApi.Controllers
 
             _logger.LogInformation("Найдено и обработано {FileCount} файлов для анализа.", filesContent.Count);
 
+            bool isCiCdMode = string.IsNullOrWhiteSpace(userPrompt) || userPrompt.ToLowerInvariant() == "ci/cd";
+
             string result;
             if (filesContent.Count <= 5)
             {
                 _logger.LogInformation("Анализ небольшого набора из {FileCount} файлов.", filesContent.Count);
-                result = await AnalyzeSmallBatchAsync(filesContent, userPrompt);
+                result = await AnalyzeSmallBatchAsync(filesContent, userPrompt, isCiCdMode);
             }
             else
             {
                 _logger.LogInformation("Анализ большой кодовой базы с {FileCount} файлами.", filesContent.Count);
-                result = await AnalyzeLargeCodebaseAsync(filesContent, userPrompt);
+                result = await AnalyzeLargeCodebaseAsync(filesContent, userPrompt, isCiCdMode);
             }
 
             _logger.LogInformation("Анализ завершен, длина результата: {ResultLength}", result.Length);
             return result;
         }
 
-        private async Task<string> AnalyzeSmallBatchAsync(Dictionary<string, string> filesContent, string userPrompt)
+        private async Task<string> AnalyzeSmallBatchAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode)
         {
             _logger.LogInformation("Начало AnalyzeSmallBatchAsync с {FileCount} файлами.", filesContent.Count);
 
@@ -177,7 +188,34 @@ namespace MarketplaceApi.Controllers
                 _logger.LogDebug("Добавлен файл в контекст: {FileName}, Длина содержимого: {ContentLength}", kvp.Key, kvp.Value.Length);
             }
 
-            string prompt = $"""
+            string prompt;
+            if (isCiCdMode)
+            {
+                var checksSection = new StringBuilder("Выполни следующие проверки в стиле CI/CD:\n\n");
+                for (int i = 0; i < _ciCdCriteria.Count; i++)
+                {
+                    checksSection.AppendLine($"{i + 1}. {_ciCdCriteria[i]}");
+                }
+
+                prompt = $"""
+Ты - опытный разработчик C#. Проанализируй полное содержимое всех файлов и выполни проверки как в CI/CD пайплайне.
+
+{checksSection}
+
+{filesContext}
+
+Для каждой проверки выведи в формате:
+**Проверка [номер]: [Краткое название]**
+Статус: Pass/Fail
+Объяснение: [Подробное объяснение, ссылайся на файлы и код]
+
+В конце дай общий итог: Сколько проверок пройдено, рекомендации.
+Проанализируй КАЖДЫЙ файл полностью. Учитывай все детали: код, структура, атрибуты, логику.
+""";
+            }
+            else
+            {
+                prompt = $"""
 Ты - опытный разработчик C#. Проанализируй полное содержимое всех файлов и ответь на вопрос.
 
 ЗАДАЧА: {userPrompt}
@@ -187,37 +225,63 @@ namespace MarketplaceApi.Controllers
 Проанализируй КАЖДЫЙ файл полностью и дай точный ответ на вопрос.
 Учитывай все детали: код, структура, атрибуты, логику.
 """;
+            }
 
             _logger.LogDebug("Сгенерирован промпт для анализа небольшого набора, длина: {PromptLength}", prompt.Length);
             return await AskOllamaAsync(prompt, 8000);
         }
 
-        private async Task<string> AnalyzeLargeCodebaseAsync(Dictionary<string, string> filesContent, string userPrompt)
+        private async Task<string> AnalyzeLargeCodebaseAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode)
         {
             _logger.LogInformation("Начало AnalyzeLargeCodebaseAsync с {FileCount} файлами.", filesContent.Count);
 
             _logger.LogDebug("Начало анализа структуры...");
-            string structureAnalysis = await AnalyzeStructureAsync(filesContent, userPrompt);
+            string structureAnalysis = await AnalyzeStructureAsync(filesContent, userPrompt, isCiCdMode);
 
             _logger.LogDebug("Начало анализа содержимого групп...");
-            string contentAnalysis = await AnalyzeByGroupsAsync(filesContent, userPrompt);
+            string contentAnalysis = await AnalyzeByGroupsAsync(filesContent, userPrompt, isCiCdMode);
 
             _logger.LogDebug("Начало анализа ключевых файлов...");
-            string detailedAnalysis = await AnalyzeKeyFilesAsync(filesContent, userPrompt);
+            string detailedAnalysis = await AnalyzeKeyFilesAsync(filesContent, userPrompt, isCiCdMode);
 
             _logger.LogDebug("Начало синтеза результатов...");
-            string finalResult = await SynthesizeResultsAsync(structureAnalysis, contentAnalysis, detailedAnalysis, userPrompt, filesContent.Keys.ToList());
+            string finalResult = await SynthesizeResultsAsync(structureAnalysis, contentAnalysis, detailedAnalysis, userPrompt, filesContent.Keys.ToList(), isCiCdMode);
 
             _logger.LogInformation("Анализ большой кодовой базы завершен.");
             return finalResult;
         }
 
-        private async Task<string> AnalyzeStructureAsync(Dictionary<string, string> filesContent, string userPrompt)
+        private async Task<string> AnalyzeStructureAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode)
         {
             _logger.LogInformation("Анализ структуры для {FileCount} файлов.", filesContent.Count);
             var fileList = string.Join("\n", filesContent.Select(kvp => $"- {kvp.Key} ({kvp.Value.Length} chars)"));
 
-            string prompt = $"""
+            string prompt;
+            if (isCiCdMode)
+            {
+                var checksSection = new StringBuilder("Учитывай эти проверки для анализа структуры:\n\n");
+                for (int i = 0; i < _ciCdCriteria.Count; i++)
+                {
+                    checksSection.AppendLine($"{i + 1}. {_ciCdCriteria[i]}");
+                }
+
+                prompt = $"""
+Проанализируй структуру этих файлов с учетом проверок CI/CD:
+
+ФАЙЛЫ:
+{fileList}
+
+{checksSection}
+
+Дай предварительный анализ структуры, связанный с проверками:
+1. Сколько всего файлов и их примерный размер
+2. Общая структура проекта
+3. Предварительные замечания по каждой проверке
+""";
+            }
+            else
+            {
+                prompt = $"""
 Проанализируй структуру этих файлов:
 
 ФАЙЛЫ:
@@ -229,12 +293,13 @@ namespace MarketplaceApi.Controllers
 1. Сколько всего файлов и их примерный размер
 2. Общая структура проекта
 """;
+            }
 
             _logger.LogDebug("Сгенерирован промпт для анализа структуры, длина: {PromptLength}", prompt.Length);
             return await AskOllamaAsync(prompt, 3000);
         }
 
-        private async Task<string> AnalyzeByGroupsAsync(Dictionary<string, string> filesContent, string userPrompt, int groupSize = 3)
+        private async Task<string> AnalyzeByGroupsAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode, int groupSize = 3)
         {
             _logger.LogInformation("Начало AnalyzeByGroupsAsync с {FileCount} файлами, размер группы: {GroupSize}.", filesContent.Count, groupSize);
             var fileItems = filesContent.ToList();
@@ -260,7 +325,33 @@ namespace MarketplaceApi.Controllers
                     _logger.LogDebug("Добавлен файл в контекст группы: {FileName}, Длина превью: {PreviewLength}", kvp.Key, preview.Length);
                 }
 
-                string prompt = $"""
+                string prompt;
+                if (isCiCdMode)
+                {
+                    var checksSection = new StringBuilder("Выполни проверки CI/CD для этой группы:\n\n");
+                    for (int j = 0; j < _ciCdCriteria.Count; j++)
+                    {
+                        checksSection.AppendLine($"{j + 1}. {_ciCdCriteria[j]}");
+                    }
+
+                    prompt = $"""
+Проанализируй эту группу файлов с учетом проверок:
+
+{groupContext}
+
+{checksSection}
+
+Для каждой проверки в этой группе выведи:
+**Проверка [номер]: [Краткое название]**
+Статус: Pass/Fail (если применимо к группе)
+Объяснение: [Краткое]
+
+Будь внимателен к деталям кода, структуры, логики.
+""";
+                }
+                else
+                {
+                    prompt = $"""
 Проанализируй эту группу файлов:
 
 {groupContext}
@@ -270,6 +361,7 @@ namespace MarketplaceApi.Controllers
 Проанализируй содержимое этих файлов и ответь на вопрос применительно к этой группе.
 Будь внимателен к деталям кода, структуры, логики.
 """;
+                }
 
                 _logger.LogDebug("Сгенерирован промпт для группы {GroupIndex}, длина: {PromptLength}", i + 1, prompt.Length);
                 string result = await AskOllamaAsync(prompt, 4000);
@@ -283,7 +375,29 @@ namespace MarketplaceApi.Controllers
             var groupsSummary = string.Join("\n\n", groupResults.Select((res, i) =>
                 $"Группа {i + 1} ({string.Join(", ", (List<string>)res["files"])}):\n{res["analysis"]}"));
 
-            string summaryPrompt = $"""
+            string summaryPrompt;
+            if (isCiCdMode)
+            {
+                var checksSection = new StringBuilder("Суммируй результаты по этим проверкам CI/CD:\n\n");
+                for (int i = 0; i < _ciCdCriteria.Count; i++)
+                {
+                    checksSection.AppendLine($"{i + 1}. {_ciCdCriteria[i]}");
+                }
+
+                summaryPrompt = $"""
+На основе анализа всех групп файлов, суммируй информацию по проверкам CI/CD:
+
+{checksSection}
+
+АНАЛИЗ ПО ГРУППАМ:
+{groupsSummary}
+
+Для каждой проверки дай сводный статус и объяснение.
+""";
+            }
+            else
+            {
+                summaryPrompt = $"""
 На основе анализа всех групп файлов, суммируй информацию:
 
 ВОПРОС: {userPrompt}
@@ -293,12 +407,13 @@ namespace MarketplaceApi.Controllers
 
 Дай сводный ответ по всем группам.
 """;
+            }
 
             _logger.LogDebug("Сгенерирован промпт для суммирования групп, длина: {PromptLength}", summaryPrompt.Length);
             return await AskOllamaAsync(summaryPrompt, 4000);
         }
 
-        private async Task<string> AnalyzeKeyFilesAsync(Dictionary<string, string> filesContent, string userPrompt)
+        private async Task<string> AnalyzeKeyFilesAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode)
         {
             _logger.LogInformation("Начало AnalyzeKeyFilesAsync...");
             var keyFiles = filesContent.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Length > 6000 ? kvp.Value.Substring(0, 6000) : kvp.Value);
@@ -318,7 +433,32 @@ namespace MarketplaceApi.Controllers
                 _logger.LogDebug("Добавлен ключевой файл в контекст: {FileName}, Длина содержимого: {ContentLength}", kvp.Key, kvp.Value.Length);
             }
 
-            string prompt = $"""
+            string prompt;
+            if (isCiCdMode)
+            {
+                var checksSection = new StringBuilder("Учитывай эти проверки для детального анализа:\n\n");
+                for (int i = 0; i < _ciCdCriteria.Count; i++)
+                {
+                    checksSection.AppendLine($"{i + 1}. {_ciCdCriteria[i]}");
+                }
+
+                prompt = $"""
+ДЕТАЛЬНЫЙ АНАЛИЗ КЛЮЧЕВЫХ ФАЙЛОВ С УЧЕТОМ ПРОВЕРОК CI/CD:
+
+{keyFilesContext}
+
+{checksSection}
+
+Для каждой проверки проанализируй подробно. Обрати внимание на:
+- Классы и их наследование
+- Атрибуты
+- Методы и логику работы
+Выведи для каждой: Статус: Pass/Fail, Объяснение.
+""";
+            }
+            else
+            {
+                prompt = $"""
 ДЕТАЛЬНЫЙ АНАЛИЗ КЛЮЧЕВЫХ ФАЙЛОВ:
 
 {keyFilesContext}
@@ -330,18 +470,58 @@ namespace MarketplaceApi.Controllers
 - Атрибуты
 - Методы и логику работы
 """;
+            }
 
             _logger.LogDebug("Сгенерирован промпт для анализа ключевых файлов, длина: {PromptLength}", prompt.Length);
             return await AskOllamaAsync(prompt, 6000);
         }
 
-        private async Task<string> SynthesizeResultsAsync(string structure, string content, string detailed, string question, List<string> allFiles)
+        private async Task<string> SynthesizeResultsAsync(string structure, string content, string detailed, string userPrompt, List<string> allFiles, bool isCiCdMode)
         {
             _logger.LogInformation("Начало SynthesizeResultsAsync...");
-            string prompt = $"""
+            string prompt;
+            if (isCiCdMode)
+            {
+                var checksSection = new StringBuilder("Синтезируй результаты по этим проверкам CI/CD:\n\n");
+                for (int i = 0; i < _ciCdCriteria.Count; i++)
+                {
+                    checksSection.AppendLine($"{i + 1}. {_ciCdCriteria[i]}");
+                }
+
+                prompt = $"""
+СИНТЕЗИРУЙ ОКОНЧАТЕЛЬНЫЙ ОТВЕТ В СТИЛЕ CI/CD:
+
+{checksSection}
+
+ВСЕ ФАЙЛЫ ДЛЯ АНАЛИЗА: {string.Join(", ", allFiles)}
+
+ЭТАПЫ АНАЛИЗА:
+
+1. 📊 СТРУКТУРНЫЙ АНАЛИЗ:
+{structure}
+
+2. 📈 АНАЛИЗ СОДЕРЖИМОГО:
+{content}
+
+3. 🔍 ДЕТАЛЬНЫЙ АНАЛИЗ:
+{detailed}
+
+На основе ВСЕХ этапов дай ОКОНЧАТЕЛЬНЫЙ отчет по проверкам.
+Для каждой проверки:
+**Проверка [номер]: [Название]**
+Статус: Pass/Fail
+Объяснение: [Подробное, с ссылками на файлы]
+
+В конце: Общий статус (сколько пройдено), рекомендации по улучшению.
+Будь конкретен и точен.
+""";
+            }
+            else
+            {
+                prompt = $"""
 СИНТЕЗИРУЙ ОКОНЧАТЕЛЬНЫЙ ОТВЕТ:
 
-ВОПРОС: {question}
+ВОПРОС: {userPrompt}
 
 ВСЕ ФАЙЛЫ ДЛЯ АНАЛИЗА: {string.Join(", ", allFiles)}
 
@@ -359,6 +539,7 @@ namespace MarketplaceApi.Controllers
 На основе ВСЕХ этапов анализа дай ОКОНЧАТЕЛЬНЫЙ, ТОЧНЫЙ ответ на вопрос.
 Учти информацию из всех этапов. Будь конкретен и точен.
 """;
+            }
 
             _logger.LogDebug("Сгенерирован промпт для синтеза результатов, длина: {PromptLength}", prompt.Length);
             return await AskOllamaAsync(prompt, 5000);
@@ -381,11 +562,10 @@ namespace MarketplaceApi.Controllers
             {
                 _logger.LogDebug("Отправка запроса к Ollama API с моделью: {Model}", _model);
 
-                // Используем нестримируемый запрос для получения полного ответа
                 var response = await _client.Completions.GenerateCompletionAsync(
                     model: _model,
                     prompt: prompt,
-                    stream: false, // Важно: отключаем стриминг
+                    stream: false,
                     options: requestOptions);
 
                 _logger.LogInformation("Вызов Ollama API завершен, длина ответа: {ResponseLength}", response.Response.Length);
