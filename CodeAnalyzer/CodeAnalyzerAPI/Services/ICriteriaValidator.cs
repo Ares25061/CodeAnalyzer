@@ -105,7 +105,7 @@ namespace CodeAnalyzerAPI.Services
 
             if (structure.HasDatabaseConnection)
             {
-                evidence.Add($"Найдена строка подключения: {structure.DatabaseConnectionString}");
+                evidence.Add($"Найдена строка подключения: {structure.DatabaseConnectionStrings}");
             }
 
             if (structure.DbContexts.Any())

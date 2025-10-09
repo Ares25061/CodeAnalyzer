@@ -1,4 +1,7 @@
-﻿namespace CodeAnalyzerAPI.Models
+﻿using System;
+using System.Collections.Generic;
+
+namespace CodeAnalyzerAPI.Models
 {
     public class AnalysisCriteria
     {
@@ -12,16 +15,10 @@
 
     public class CriteriaRule
     {
-        public string Property { get; set; } = string.Empty; // "controllers", "pages", "migrations", etc.
-        public string Operator { get; set; } = "exists"; // exists, count_greater_than, contains, regex
+        public string Property { get; set; } = string.Empty;
+        public string Operator { get; set; } = "exists";
         public object Value { get; set; } = string.Empty;
         public string ErrorMessage { get; set; } = string.Empty;
-    }
-
-    public enum CriteriaType
-    {
-        Structural,  // Только структура
-        FullContent  // Полный анализ содержимого
     }
 
     public class CriteriaCheckResult
@@ -31,5 +28,11 @@
         public bool Passed { get; set; }
         public string Message { get; set; } = string.Empty;
         public List<string> Evidence { get; set; } = new List<string>();
+    }
+
+    public enum CriteriaType
+    {
+        Structural,
+        FullContent
     }
 }

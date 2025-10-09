@@ -10,14 +10,15 @@ namespace CodeAnalyzerAPI
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
-
             builder.Services.AddControllers();
-            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
+
             // Register services
             builder.Services.AddScoped<IProjectStructureAnalyzer, ProjectStructureAnalyzer>();
             builder.Services.AddScoped<ICriteriaValidator, CriteriaValidator>();
+
+            // CORS
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowSpecificOrigins", builder =>
@@ -27,11 +28,14 @@ namespace CodeAnalyzerAPI
                            .AllowAnyMethod();
                 });
             });
-            builder.Services.AddSingleton(s =>
+
+            // Ollama client - ПРАВИЛЬНАЯ настройка
+            builder.Services.AddSingleton<OllamaApiClient>(provider =>
             {
+                // Создаем HttpClient и передаем его в OllamaApiClient
                 var httpClient = new HttpClient
                 {
-                    BaseAddress = new Uri("http://localhost:11434/api/")
+                    BaseAddress = new Uri("http://localhost:11434/")
                 };
                 return new OllamaApiClient(httpClient);
             });
@@ -46,14 +50,10 @@ namespace CodeAnalyzerAPI
             }
 
             app.UseHttpsRedirection();
-
+            app.UseCors("AllowSpecificOrigins");
             app.UseAuthorization();
 
-
-            app.UseCors("AllowSpecificOrigins");
-            app.UseHttpsRedirection();
             app.MapControllers();
-            app.Run();
 
             app.Run();
         }

@@ -22,12 +22,6 @@ namespace CodeAnalyzerWEB.Models
         public string ErrorMessage { get; set; } = string.Empty;
     }
 
-    public enum CriteriaType
-    {
-        Structural,
-        FullContent
-    }
-
     public class CriteriaCheckResult
     {
         public string CriteriaId { get; set; } = string.Empty;
@@ -35,5 +29,11 @@ namespace CodeAnalyzerWEB.Models
         public bool Passed { get; set; }
         public string Message { get; set; } = string.Empty;
         public List<string> Evidence { get; set; } = new List<string>();
+    }
+
+    public enum CriteriaType
+    {
+        Structural,
+        FullContent
     }
 }

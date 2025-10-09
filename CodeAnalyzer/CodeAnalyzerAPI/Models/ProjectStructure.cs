@@ -20,8 +20,11 @@ namespace CodeAnalyzerAPI.Models
         public int TotalPages => Pages.Count;
         public bool HasDbContext => DbContexts.Count > 0;
         public bool HasMigrations => Migrations.Count > 0;
-        public bool HasDatabaseConnection => !string.IsNullOrEmpty(DatabaseConnectionString);
-        public string DatabaseConnectionString { get; set; } = string.Empty;
+        public bool HasDatabaseConnection => DatabaseConnectionStrings.Count > 0;
+        public List<string> DatabaseConnectionStrings { get; set; } = new List<string>();
+        public List<string> MigrationCommands { get; set; } = new List<string>();
+        public bool OllamaAvailable { get; set; }
+        public string OllamaStatus { get; set; } = "Не проверено";
     }
 
     public class ProjectFile
@@ -34,6 +37,7 @@ namespace CodeAnalyzerAPI.Models
         public FileType Type { get; set; }
         public string Content { get; set; } = string.Empty;
         public List<string> FoundPatterns { get; set; } = new List<string>();
+        public double Confidence { get; set; } = 1.0;
     }
 
     public enum FileType
@@ -47,6 +51,7 @@ namespace CodeAnalyzerAPI.Models
         Config,
         Service,
         Program,
-        Entity
+        Entity,
+        BaseController
     }
 }
