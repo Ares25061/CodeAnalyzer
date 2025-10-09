@@ -1,11 +1,13 @@
 ﻿using Microsoft.Extensions.Logging;
 using CodeAnalyzerAPI.Models;
+using System.Text.RegularExpressions;
 
 namespace CodeAnalyzerAPI.Services
 {
     public interface IProjectStructureAnalyzer
     {
         Task<ProjectStructure> AnalyzeStructureAsync(string folderPath, List<string> extensions);
+        Task<ProjectStructure> AnalyzeWithContentAsync(string folderPath, List<string> extensions);
     }
 
     public class ProjectStructureAnalyzer : IProjectStructureAnalyzer
@@ -19,7 +21,17 @@ namespace CodeAnalyzerAPI.Services
 
         public async Task<ProjectStructure> AnalyzeStructureAsync(string folderPath, List<string> extensions)
         {
-            _logger.LogInformation("Анализ структуры проекта: {FolderPath}", folderPath);
+            return await AnalyzeProjectAsync(folderPath, extensions, readContent: false);
+        }
+
+        public async Task<ProjectStructure> AnalyzeWithContentAsync(string folderPath, List<string> extensions)
+        {
+            return await AnalyzeProjectAsync(folderPath, extensions, readContent: true);
+        }
+
+        private async Task<ProjectStructure> AnalyzeProjectAsync(string folderPath, List<string> extensions, bool readContent)
+        {
+            _logger.LogInformation("Анализ проекта: {FolderPath}, ReadContent: {ReadContent}", folderPath, readContent);
 
             var structure = new ProjectStructure { ProjectPath = folderPath };
             var fullPath = Path.GetFullPath(folderPath);
@@ -32,25 +44,33 @@ namespace CodeAnalyzerAPI.Services
 
             try
             {
-                await AnalyzeFileStructure(fullPath, extensions, structure);
-                _logger.LogInformation("Структурный анализ завершен. Найдено: {FilesCount} файлов, {ControllersCount} контроллеров, {PagesCount} страниц",
-                    structure.Files.Count, structure.Controllers.Count, structure.Pages.Count);
+                // 1. Анализ файловой структуры
+                await AnalyzeFileStructure(fullPath, extensions, structure, readContent);
+
+                // 2. Поиск строки подключения к БД
+                await FindDatabaseConnectionString(structure);
+
+                _logger.LogInformation("Анализ завершен. Найдено: {FilesCount} файлов, {ControllersCount} контроллеров, {DbContextsCount} DbContext, {MigrationsCount} миграций",
+                    structure.Files.Count, structure.Controllers.Count, structure.DbContexts.Count, structure.Migrations.Count);
 
                 return structure;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при анализе структуры проекта");
+                _logger.LogError(ex, "Ошибка при анализе проекта");
                 structure.Error = ex.Message;
                 return structure;
             }
         }
 
-        private async Task AnalyzeFileStructure(string folderPath, List<string> extensions, ProjectStructure structure)
+        private async Task AnalyzeFileStructure(string folderPath, List<string> extensions, ProjectStructure structure, bool readContent)
         {
             var allFiles = Directory.EnumerateFiles(folderPath, "*.*", SearchOption.AllDirectories)
                 .Where(file => extensions.Contains(Path.GetExtension(file).ToLowerInvariant()))
                 .ToList();
+
+            _logger.LogInformation("Найдено {FileCount} файлов с расширениями: {Extensions}",
+                allFiles.Count, string.Join(", ", extensions));
 
             foreach (var filePath in allFiles)
             {
@@ -66,52 +86,243 @@ namespace CodeAnalyzerAPI.Services
                     Directory = Path.GetDirectoryName(relativePath) ?? string.Empty
                 };
 
-                DetermineFileType(projectFile, structure);
+                // Читаем содержимое если нужно
+                if (readContent)
+                {
+                    try
+                    {
+                        projectFile.Content = await File.ReadAllTextAsync(filePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Не удалось прочитать файл {FilePath}: {Message}", filePath, ex.Message);
+                    }
+                }
+
+                // Определяем тип файла с учетом содержимого
+                await DetermineFileTypeAsync(projectFile, structure, readContent);
                 structure.Files.Add(projectFile);
             }
         }
 
-        private void DetermineFileType(ProjectFile file, ProjectStructure structure)
+        private async Task DetermineFileTypeAsync(ProjectFile file, ProjectStructure structure, bool hasContent)
         {
-            // Определяем контроллеры
+            var detectedTypes = new List<FileType>();
+
+            // 1. Определяем по имени файла и пути
+            DetectByFileNameAndPath(file, detectedTypes);
+
+            // 2. Если есть содержимое, анализируем его
+            if (hasContent && !string.IsNullOrEmpty(file.Content))
+            {
+                await DetectByContentAsync(file, detectedTypes);
+            }
+
+            // Выбираем основной тип (приоритет в порядке проверки)
+            file.Type = detectedTypes.FirstOrDefault();
+
+            // Добавляем в соответствующие коллекции
+            AddToCollections(file, structure, detectedTypes);
+        }
+
+        private void DetectByFileNameAndPath(ProjectFile file, List<FileType> detectedTypes)
+        {
+            // КОНТРОЛЛЕРЫ - ищем в любом месте
             if (file.Name.EndsWith("controller.cs", StringComparison.OrdinalIgnoreCase) ||
-                (file.Directory?.Contains("controllers", StringComparison.OrdinalIgnoreCase) == true &&
-                 file.Extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)))
+                file.Name.Contains("Controller") && file.Extension == ".cs")
             {
-                file.Type = FileType.Controller;
+                detectedTypes.Add(FileType.Controller);
+                file.FoundPatterns.Add("Имя файла содержит 'Controller'");
+            }
+
+            // DbContext - ищем в любом месте
+            if (file.Name.Contains("Context", StringComparison.OrdinalIgnoreCase) &&
+                file.Extension == ".cs")
+            {
+                detectedTypes.Add(FileType.DbContext);
+                file.FoundPatterns.Add("Имя файла содержит 'Context'");
+            }
+
+            // МИГРАЦИИ - ищем в любом месте
+            if ((file.Directory?.Contains("Migration", StringComparison.OrdinalIgnoreCase) == true ||
+                 file.Name.Contains("Migration", StringComparison.OrdinalIgnoreCase)) &&
+                file.Extension == ".cs")
+            {
+                detectedTypes.Add(FileType.Migration);
+                file.FoundPatterns.Add("Найдено в папке/файле миграций");
+            }
+
+            // Program.cs
+            if (file.Name.Equals("Program.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                detectedTypes.Add(FileType.Program);
+                file.FoundPatterns.Add("Главный файл Program.cs");
+            }
+
+            // СТРАНИЦЫ Razor
+            if (file.Extension == ".razor" || file.Extension == ".cshtml")
+            {
+                detectedTypes.Add(FileType.Page);
+                file.FoundPatterns.Add("Файл Razor/Blazor");
+            }
+
+            // КОНФИГУРАЦИОННЫЕ файлы
+            if (file.Name.Contains("appsettings", StringComparison.OrdinalIgnoreCase) ||
+                file.Extension == ".json" || file.Extension == ".config")
+            {
+                detectedTypes.Add(FileType.Config);
+                file.FoundPatterns.Add("Конфигурационный файл");
+            }
+
+            // СЕРВИСЫ
+            if (file.Name.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase) ||
+                (file.Directory?.Contains("Service", StringComparison.OrdinalIgnoreCase) == true &&
+                 file.Extension == ".cs"))
+            {
+                detectedTypes.Add(FileType.Service);
+                file.FoundPatterns.Add("Файл сервиса");
+            }
+
+            // МОДЕЛИ/СУЩНОСТИ
+            if (file.Name.EndsWith("Model.cs", StringComparison.OrdinalIgnoreCase) ||
+                file.Name.EndsWith("Entity.cs", StringComparison.OrdinalIgnoreCase) ||
+                (file.Directory?.Contains("Model", StringComparison.OrdinalIgnoreCase) == true &&
+                 file.Extension == ".cs"))
+            {
+                detectedTypes.Add(FileType.Model);
+                file.FoundPatterns.Add("Файл модели/сущности");
+            }
+        }
+
+        private async Task DetectByContentAsync(ProjectFile file, List<FileType> detectedTypes)
+        {
+            var content = file.Content;
+
+            // КОНТРОЛЛЕР - ищем атрибуты контроллера
+            if (content.Contains("[ApiController]") ||
+                content.Contains("ControllerBase") ||
+                content.Contains("Microsoft.AspNetCore.Mvc"))
+            {
+                if (!detectedTypes.Contains(FileType.Controller))
+                {
+                    detectedTypes.Add(FileType.Controller);
+                    file.FoundPatterns.Add("Содержит атрибуты контроллера");
+                }
+            }
+
+            // DbContext - ищем наследование от DbContext
+            if (content.Contains("DbContext") ||
+                content.Contains("Microsoft.EntityFrameworkCore"))
+            {
+                if (!detectedTypes.Contains(FileType.DbContext))
+                {
+                    detectedTypes.Add(FileType.DbContext);
+                    file.FoundPatterns.Add("Содержит DbContext");
+                }
+            }
+
+            // МИГРАЦИИ - ищем специфичные для миграций шаблоны
+            if (content.Contains("migration", StringComparison.OrdinalIgnoreCase) ||
+                content.Contains("Microsoft.EntityFrameworkCore.Migrations"))
+            {
+                if (!detectedTypes.Contains(FileType.Migration))
+                {
+                    detectedTypes.Add(FileType.Migration);
+                    file.FoundPatterns.Add("Содержит код миграции");
+                }
+            }
+
+            // ПОДКЛЮЧЕНИЕ К БД - ищем строки подключения
+            if (content.Contains("ConnectionString") ||
+                content.Contains("UseSqlServer") ||
+                content.Contains("UseNpgsql") ||
+                content.Contains("UseSqlite"))
+            {
+                file.FoundPatterns.Add("Содержит настройки БД");
+            }
+
+            // СЕРВИСЫ - ищем DI регистрации
+            if (content.Contains("AddScoped") ||
+                content.Contains("AddTransient") ||
+                content.Contains("AddSingleton"))
+            {
+                if (!detectedTypes.Contains(FileType.Service))
+                {
+                    detectedTypes.Add(FileType.Service);
+                    file.FoundPatterns.Add("Содержит регистрацию сервисов");
+                }
+            }
+        }
+
+        private void AddToCollections(ProjectFile file, ProjectStructure structure, List<FileType> detectedTypes)
+        {
+            if (detectedTypes.Contains(FileType.Controller))
                 structure.Controllers.Add(file);
-            }
-            // Определяем страницы Razor
-            else if (file.Extension.Equals(".razor", StringComparison.OrdinalIgnoreCase) ||
-                     file.Extension.Equals(".cshtml", StringComparison.OrdinalIgnoreCase) ||
-                     (file.Directory?.Contains("pages", StringComparison.OrdinalIgnoreCase) == true))
-            {
-                file.Type = FileType.Page;
-                structure.Pages.Add(file);
-            }
-            // Определяем контексты БД
-            else if (file.Name.Contains("context", StringComparison.OrdinalIgnoreCase) &&
-                     file.Extension.Equals(".cs", StringComparison.OrdinalIgnoreCase))
-            {
-                file.Type = FileType.DbContext;
+
+            if (detectedTypes.Contains(FileType.DbContext))
                 structure.DbContexts.Add(file);
-            }
-            // Определяем файлы миграций
-            else if (file.Directory?.Contains("migrations", StringComparison.OrdinalIgnoreCase) == true &&
-                     file.Extension.Equals(".cs", StringComparison.OrdinalIgnoreCase))
-            {
-                file.Type = FileType.Migration;
+
+            if (detectedTypes.Contains(FileType.Migration))
                 structure.Migrations.Add(file);
-            }
-            // Определяем конфигурационные файлы
-            else if (file.Name.Contains("appsettings", StringComparison.OrdinalIgnoreCase) ||
-                     file.Name.Equals("program.cs", StringComparison.OrdinalIgnoreCase) ||
-                     file.Name.Equals("startup.cs", StringComparison.OrdinalIgnoreCase) ||
-                     file.Extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
-                     file.Extension.Equals(".config", StringComparison.OrdinalIgnoreCase))
-            {
-                file.Type = FileType.Config;
+
+            if (detectedTypes.Contains(FileType.Page))
+                structure.Pages.Add(file);
+
+            if (detectedTypes.Contains(FileType.Model))
+                structure.Models.Add(file);
+
+            if (detectedTypes.Contains(FileType.Service))
+                structure.Services.Add(file);
+
+            if (detectedTypes.Contains(FileType.Program))
+                structure.ProgramFiles.Add(file);
+
+            if (detectedTypes.Contains(FileType.Config))
                 structure.ConfigFiles.Add(file);
+        }
+
+        private async Task FindDatabaseConnectionString(ProjectStructure structure)
+        {
+            try
+            {
+                // Ищем в Program.cs и appsettings.json
+                var configFiles = structure.Files
+                    .Where(f => f.Type == FileType.Program ||
+                               f.Name.Contains("appsettings") && f.Type == FileType.Config)
+                    .ToList();
+
+                foreach (var file in configFiles)
+                {
+                    if (string.IsNullOrEmpty(file.Content) && System.IO.File.Exists(Path.Combine(structure.ProjectPath, file.Path)))
+                    {
+                        file.Content = await File.ReadAllTextAsync(Path.Combine(structure.ProjectPath, file.Path));
+                    }
+
+                    if (!string.IsNullOrEmpty(file.Content))
+                    {
+                        // Ищем строку подключения в Program.cs
+                        var programMatch = Regex.Match(file.Content, @"UseSqlServer\([^)]*?([""'])(.*?)\1", RegexOptions.Singleline);
+                        if (programMatch.Success)
+                        {
+                            structure.DatabaseConnectionString = programMatch.Groups[2].Value;
+                            _logger.LogInformation("Найдена строка подключения в Program.cs");
+                            break;
+                        }
+
+                        // Ищем в appsettings.json
+                        var settingsMatch = Regex.Match(file.Content, @"""ConnectionString""\s*:\s*""([^""]*)""", RegexOptions.Singleline);
+                        if (settingsMatch.Success)
+                        {
+                            structure.DatabaseConnectionString = settingsMatch.Groups[1].Value;
+                            _logger.LogInformation("Найдена строка подключения в appsettings.json");
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Ошибка при поиске строки подключения: {Message}", ex.Message);
             }
         }
     }

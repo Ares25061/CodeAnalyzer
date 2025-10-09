@@ -99,10 +99,46 @@ namespace CodeAnalyzerAPI.Services
             return ValidateCountRule("страниц", count, rule, structure.Pages.Select(p => p.Path).ToList());
         }
 
+        private CriteriaCheckResult ValidateDatabaseConnection(ProjectStructure structure, CriteriaRule rule)
+        {
+            var evidence = new List<string>();
+
+            if (structure.HasDatabaseConnection)
+            {
+                evidence.Add($"Найдена строка подключения: {structure.DatabaseConnectionString}");
+            }
+
+            if (structure.DbContexts.Any())
+            {
+                evidence.AddRange(structure.DbContexts.Select(d => $"DbContext: {d.Path}"));
+            }
+
+            if (structure.Migrations.Any())
+            {
+                evidence.AddRange(structure.Migrations.Select(m => $"Миграция: {m.Path}"));
+            }
+
+            return new CriteriaCheckResult
+            {
+                Passed = structure.HasDatabaseConnection,
+                Message = structure.HasDatabaseConnection
+                    ? "Подключение к БД настроено"
+                    : "Подключение к БД не найдено",
+                Evidence = evidence
+            };
+        }
+
         private CriteriaCheckResult ValidateMigrations(ProjectStructure structure, CriteriaRule rule)
         {
             var count = structure.Migrations.Count;
-            return ValidateCountRule("миграций", count, rule, structure.Migrations.Select(m => m.Path).ToList());
+            var evidence = structure.Migrations.Select(m => m.Path).ToList();
+
+            if (structure.DbContexts.Any() && count == 0)
+            {
+                evidence.Add("ВНИМАНИЕ: DbContext найден, но миграций нет");
+            }
+
+            return ValidateCountRule("миграций", count, rule, evidence);
         }
 
         private CriteriaCheckResult ValidateDbContext(ProjectStructure structure, CriteriaRule rule)

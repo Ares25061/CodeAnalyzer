@@ -1,4 +1,6 @@
-﻿namespace CodeAnalyzerAPI.Models
+﻿using System.Collections.Generic;
+
+namespace CodeAnalyzerAPI.Models
 {
     public class ProjectStructure
     {
@@ -10,10 +12,16 @@
         public List<ProjectFile> DbContexts { get; set; } = new List<ProjectFile>();
         public List<ProjectFile> Migrations { get; set; } = new List<ProjectFile>();
         public List<ProjectFile> ConfigFiles { get; set; } = new List<ProjectFile>();
+        public List<ProjectFile> Services { get; set; } = new List<ProjectFile>();
+        public List<ProjectFile> ProgramFiles { get; set; } = new List<ProjectFile>();
         public string Error { get; set; } = string.Empty;
         public int TotalFiles => Files.Count;
         public int TotalControllers => Controllers.Count;
         public int TotalPages => Pages.Count;
+        public bool HasDbContext => DbContexts.Count > 0;
+        public bool HasMigrations => Migrations.Count > 0;
+        public bool HasDatabaseConnection => !string.IsNullOrEmpty(DatabaseConnectionString);
+        public string DatabaseConnectionString { get; set; } = string.Empty;
     }
 
     public class ProjectFile
@@ -25,6 +33,7 @@
         public string Directory { get; set; } = string.Empty;
         public FileType Type { get; set; }
         public string Content { get; set; } = string.Empty;
+        public List<string> FoundPatterns { get; set; } = new List<string>();
     }
 
     public enum FileType
@@ -37,6 +46,7 @@
         Migration,
         Config,
         Service,
-        Component
+        Program,
+        Entity
     }
 }

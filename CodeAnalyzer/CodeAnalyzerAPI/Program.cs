@@ -31,7 +31,7 @@ namespace CodeAnalyzerAPI
             {
                 var httpClient = new HttpClient
                 {
-                    BaseAddress = new Uri("https://domainollamaforproject-ru.tail8590fc.ts.net/api/")
+                    BaseAddress = new Uri("http://localhost:11434/api/")
                 };
                 return new OllamaApiClient(httpClient);
             });

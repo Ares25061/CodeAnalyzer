@@ -32,8 +32,8 @@ namespace CodeAnalyzerAPI.Controllers
         {
             var startTime = DateTime.UtcNow;
 
-            _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Режим={Mode}, Критериев={CriteriaCount}",
-                request.FolderPath, request.Mode, request.Criteria?.Count ?? 0);
+            _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Режим={Mode}",
+                request.FolderPath, request.Mode);
 
             if (string.IsNullOrWhiteSpace(request.FolderPath))
             {
@@ -46,10 +46,21 @@ namespace CodeAnalyzerAPI.Controllers
 
             try
             {
-                // 1. Анализ структуры проекта
-                var structure = await _structureAnalyzer.AnalyzeStructureAsync(
-                    request.FolderPath,
-                    request.Extensions);
+                ProjectStructure structure;
+
+                // Выбираем тип анализа
+                if (request.Mode == AnalysisMode.FullContent)
+                {
+                    structure = await _structureAnalyzer.AnalyzeWithContentAsync(
+                        request.FolderPath,
+                        request.Extensions);
+                }
+                else
+                {
+                    structure = await _structureAnalyzer.AnalyzeStructureAsync(
+                        request.FolderPath,
+                        request.Extensions);
+                }
 
                 if (!string.IsNullOrEmpty(structure.Error))
                 {
@@ -60,7 +71,7 @@ namespace CodeAnalyzerAPI.Controllers
                     });
                 }
 
-                // 2. Проверка критериев
+                // Проверка критериев
                 List<CriteriaCheckResult> results = new();
                 if (request.Criteria?.Any() == true)
                 {
@@ -68,10 +79,10 @@ namespace CodeAnalyzerAPI.Controllers
                         structure, request.Criteria, request.Mode);
                 }
 
-                // 3. Если нужен полный анализ с нейросетью
+                // Полный анализ с нейросетью
                 if (request.Mode == AnalysisMode.FullContent)
                 {
-                    await PerformFullContentAnalysis(structure, results);
+                    await PerformAiAnalysisAsync(structure, results);
                 }
 
                 var analysisTime = DateTime.UtcNow - startTime;
@@ -102,7 +113,7 @@ namespace CodeAnalyzerAPI.Controllers
 
             var structure = await _structureAnalyzer.AnalyzeStructureAsync(
                 request.FolderPath,
-                request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json" });
+                request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
 
             if (!string.IsNullOrEmpty(structure.Error))
             {
@@ -119,77 +130,87 @@ namespace CodeAnalyzerAPI.Controllers
                     controllers = structure.TotalControllers,
                     pages = structure.TotalPages,
                     migrations = structure.Migrations.Count,
-                    dbContexts = structure.DbContexts.Count
+                    dbContexts = structure.DbContexts.Count,
+                    hasDatabaseConnection = structure.HasDatabaseConnection,
+                    databaseConnectionFound = !string.IsNullOrEmpty(structure.DatabaseConnectionString)
                 }
             });
         }
 
-        private async Task PerformFullContentAnalysis(ProjectStructure structure, List<CriteriaCheckResult> results)
-        {
-            // Здесь можно добавить логику для полного анализа содержимого с нейросетью
-            // с разбивкой на группы файлов как вы хотели
-            _logger.LogInformation("Начат полный анализ содержимого для {FileCount} файлов", structure.Files.Count);
-
-            // Пример: разбиваем файлы на группы по 5
-            var fileGroups = structure.Files
-                .Where(f => f.Type != FileType.Unknown)
-                .Select((file, index) => new { file, index })
-                .GroupBy(x => x.index / 5)
-                .Select(g => g.Select(x => x.file).ToList())
-                .ToList();
-
-            foreach (var fileGroup in fileGroups)
-            {
-                await AnalyzeFileGroupWithAI(fileGroup);
-                // Добавляем задержку между запросами чтобы не перегружать API
-                await Task.Delay(1000);
-            }
-        }
-
-        private async Task AnalyzeFileGroupWithAI(List<ProjectFile> files)
+        private async Task PerformAiAnalysisAsync(ProjectStructure structure, List<CriteriaCheckResult> results)
         {
             try
             {
-                var prompt = BuildAnalysisPrompt(files);
+                _logger.LogInformation("Начат AI анализ для {FileCount} файлов", structure.Files.Count);
+
+                // Группируем файлы по типам для анализа
+                var analysisGroups = new[]
+                {
+                    new { Name = "Контроллеры", Files = structure.Controllers.Take(5) },
+                    new { Name = "DbContext", Files = structure.DbContexts.Take(3) },
+                    new { Name = "Миграции", Files = structure.Migrations.Take(3) },
+                    new { Name = "Program.cs", Files = structure.ProgramFiles.Take(2) },
+                    new { Name = "Сервисы", Files = structure.Services.Take(5) }
+                };
+
+                foreach (var group in analysisGroups.Where(g => g.Files.Any()))
+                {
+                    await AnalyzeFileGroupWithAI(group.Name, group.Files.ToList());
+                    await Task.Delay(1000); // Задержка между запросами
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка AI анализа");
+            }
+        }
+
+        private async Task AnalyzeFileGroupWithAI(string groupName, List<ProjectFile> files)
+        {
+            try
+            {
+                var prompt = BuildAnalysisPrompt(groupName, files);
                 var response = await _ollama.Completions.GenerateCompletionAsync(
                     model: "deepseek-v3.1:671b-cloud",
                     prompt: prompt,
                     options: new RequestOptions { Temperature = 0.1f, NumPredict = 4000 });
 
-                _logger.LogDebug("AI анализ завершен для группы из {FileCount} файлов", files.Count);
+                _logger.LogDebug("AI анализ завершен для группы: {GroupName}", groupName);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка AI анализа для группы файлов");
+                _logger.LogError(ex, "Ошибка AI анализа для группы {GroupName}", groupName);
             }
         }
 
-        private string BuildAnalysisPrompt(List<ProjectFile> files)
+        private string BuildAnalysisPrompt(string groupName, List<ProjectFile> files)
         {
-            var prompt = new StringBuilder("Проанализируй следующие файлы проекта:\n\n");
+            var prompt = new StringBuilder();
+            prompt.AppendLine($"Проанализируй {groupName} проекта:\n");
 
             foreach (var file in files)
             {
-                prompt.AppendLine($"Файл: {file.Path}");
-                prompt.AppendLine($"Тип: {file.Type}");
-                prompt.AppendLine("```csharp");
-                prompt.AppendLine(file.Content.Length > 3000 ? file.Content.Substring(0, 3000) + "..." : file.Content);
-                prompt.AppendLine("```\n");
+                prompt.AppendLine($"=== Файл: {file.Path} ===");
+                prompt.AppendLine($"Размер: {file.Size} байт");
+                prompt.AppendLine($"Обнаруженные паттерны: {string.Join(", ", file.FoundPatterns)}");
+
+                if (!string.IsNullOrEmpty(file.Content))
+                {
+                    var preview = file.Content.Length > 2000 ? file.Content.Substring(0, 2000) + "..." : file.Content;
+                    prompt.AppendLine("```csharp");
+                    prompt.AppendLine(preview);
+                    prompt.AppendLine("```");
+                }
+                prompt.AppendLine();
             }
 
-            prompt.AppendLine("Проверь:");
-            prompt.AppendLine("1. Корректность кода");
-            prompt.AppendLine("2. Наличие потенциальных ошибок");
-            prompt.AppendLine("3. Соответствие best practices");
-            prompt.AppendLine("4. Наличие необходимых атрибутов и конфигураций");
+            prompt.AppendLine("Задачи анализа:");
+            prompt.AppendLine("1. Проверь корректность кода и архитектуры");
+            prompt.AppendLine("2. Найди потенциальные проблемы");
+            prompt.AppendLine("3. Проверь соответствие best practices");
+            prompt.AppendLine("4. Оцени качество кода");
 
             return prompt.ToString();
         }
-    }
-
-    public class StructureAnalysisRequest
-    {
-        public string FolderPath { get; set; } = string.Empty;
-        public List<string> Extensions { get; set; } = new List<string> { ".cs", ".razor", ".cshtml", ".json" };
     }
 }
