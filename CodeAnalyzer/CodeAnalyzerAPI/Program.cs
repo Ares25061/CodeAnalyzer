@@ -1,4 +1,4 @@
-
+using CodeAnalyzerAPI.Services;
 using Ollama;
 
 namespace CodeAnalyzerAPI
@@ -15,6 +15,9 @@ namespace CodeAnalyzerAPI
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
+            // Register services
+            builder.Services.AddScoped<IProjectStructureAnalyzer, ProjectStructureAnalyzer>();
+            builder.Services.AddScoped<ICriteriaValidator, CriteriaValidator>();
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowSpecificOrigins", builder =>

@@ -2,6 +2,7 @@
 @using System.Net.Http
 @using System.Text.Json
 @using System.Text.RegularExpressions
+@using CodeAnalyzerWEB.Models
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 
@@ -9,19 +10,47 @@
     <div class="container analyzer-container">
         <div class="analyzer-header">
             <div class="header-title">
-                <h3>Анализатор кода проекта (CI/CD стиль)</h3>
+                <h3>Анализатор проекта с критериями</h3>
             </div>
             <button class="clear-history-btn" @onclick="ClearAnalysisHistory" title="Очистить историю">
                 <i class="bi bi-trash"></i>
             </button>
         </div>
+
+        <!-- Форма ввода -->
         <div class="input-form">
-            <label>Путь к папке (или ссылка на проект):</label>
-            <input @bind="folderPath" placeholder="Введите путь к папке..." />
-            <label>Промпт для анализа (оставьте пустым для CI/CD режима):</label>
-            <textarea @bind="prompt" placeholder="Введите кастомный промпт или оставьте пустым для автоматических проверок..." rows="4"></textarea>
-            <label>Расширения файлов (через запятую):</label>
-            <input @bind="extensionsInput" placeholder=".cs,.js,.py,.txt,.md" />
+            <div class="form-group">
+                <label>Путь к папке проекта:</label>
+                <input @bind="folderPath" placeholder="Введите путь к папке..." class="form-control" />
+            </div>
+
+            <div class="form-group">
+                <label>Режим анализа:</label>
+                <select @bind="analysisMode" class="form-control">
+                    <option value="Structural">Структурный (быстрый)</option>
+                    <option value="FullContent">Полный (с анализом содержимого)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Критерии проверки:</label>
+                <div class="criteria-list">
+                    @foreach (var criterion in availableCriteria)
+                    {
+                        <div class="criterion-item">
+                            <input type="checkbox"
+                                   @bind="criterion.Selected"
+                                   id="@criterion.Id" />
+                            <label for="@criterion.Id">@criterion.Name</label>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Расширения файлов (через запятую):</label>
+                <input @bind="extensionsInput" placeholder=".cs,.razor,.cshtml,.json" class="form-control" />
+            </div>
         </div>
 
         <!-- Статус анализа -->
@@ -35,6 +64,7 @@
             }
         </div>
 
+        <!-- История анализа -->
         <ul class="analysis-history">
             @foreach (var message in analysisHistory)
             {
@@ -42,24 +72,63 @@
                     @if (message.Type == MessageType.User)
                     {
                         <div class="message-header">
-                            <strong>Запрос:</strong>
+                            <strong>Запрос анализа:</strong>
                         </div>
                         <div class="message-content">
-                            @foreach (var line in message.Text.Split('\n'))
-                            {
-                                <p>@line</p>
-                            }
+                            <p><strong>Папка:</strong> @message.FolderPath</p>
+                            <p><strong>Режим:</strong> @message.Mode</p>
+                            <p><strong>Критерии:</strong> @string.Join(", ", message.Criteria)</p>
                         </div>
                     }
                     else
                     {
                         <div class="message-content formatted-content">
+                            @if (message.Structure != null)
+                            {
+                                <div class="structure-summary">
+                                    <h4>Структура проекта:</h4>
+                                    <p>📁 Файлов: @message.Structure.TotalFiles</p>
+                                    <p>🎮 Контроллеров: @message.Structure.TotalControllers</p>
+                                    <p>📄 Страниц: @message.Structure.TotalPages</p>
+                                    <p>🔄 Миграций: @message.Structure.Migrations.Count</p>
+                                    <p>🗄️ DbContext: @message.Structure.DbContexts.Count</p>
+                                </div>
+                            }
+
+                            @if (message.Results?.Any() == true)
+                            {
+                                <div class="criteria-results">
+                                    <h4>Результаты проверки критериев:</h4>
+                                    @foreach (var result in message.Results)
+                                    {
+                                        <div class="result-item @(result.Passed ? "passed" : "failed")">
+                                            <strong>@result.CriteriaName</strong>
+                                            <span class="status-badge">@(result.Passed ? "✅ PASS" : "❌ FAIL")</span>
+                                            <p>@result.Message</p>
+                                            @if (result.Evidence?.Any() == true)
+                                            {
+                                                <details>
+                                                    <summary>Детали</summary>
+                                                    <ul>
+                                                        @foreach (var evidence in result.Evidence)
+                                                        {
+                                                            <li>@evidence</li>
+                                                        }
+                                                    </ul>
+                                                </details>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+
                             @if (!string.IsNullOrEmpty(message.Text))
                             {
                                 @((MarkupString)FormatMarkdown(message.Text))
                             }
                         </div>
                     }
+
                     @if (!string.IsNullOrEmpty(message.Timestamp))
                     {
                         <div class="message-timestamp">
@@ -69,27 +138,44 @@
                 </li>
             }
         </ul>
+
+        <!-- Кнопки управления -->
         <div class="input-container">
-            <button @onclick="StartAnalysis" disabled="@(isAnalyzing)">
+            <button @onclick="StartAnalysis" disabled="@isAnalyzing" class="btn btn-primary">
                 @if (isAnalyzing)
                 {
                     <span>Анализируется...</span>
                 }
                 else
                 {
-                    <span>Анализировать</span>
+                    <span>Анализировать проект</span>
                 }
+            </button>
+
+            <button @onclick="AnalyzeStructureOnly" disabled="@isAnalyzing" class="btn btn-secondary">
+                Только структура
             </button>
         </div>
     </div>
 </div>
 
 @code {
-    private List<AnalysisMessage> analysisHistory = new List<AnalysisMessage>();
+    private List<AnalysisMessage> analysisHistory = new();
     private string folderPath = string.Empty;
-    private string prompt = string.Empty;
-    private string extensionsInput = ".cs,.js,.py,.txt,.md";
+    private string analysisMode = "Structural";
+    private string extensionsInput = ".cs,.razor,.cshtml,.json";
     private bool isAnalyzing = false;
+
+    private List<CriteriaOption> availableCriteria = new()
+    {
+        new CriteriaOption { Id = "controllers", Name = "Наличие контроллеров", Selected = true },
+        new CriteriaOption { Id = "min_controllers", Name = "Минимум 3 контроллера", Selected = false },
+        new CriteriaOption { Id = "pages", Name = "Наличие страниц", Selected = true },
+        new CriteriaOption { Id = "min_pages", Name = "Минимум 2 страницы", Selected = false },
+        new CriteriaOption { Id = "migrations", Name = "Наличие миграций", Selected = false },
+        new CriteriaOption { Id = "dbcontext", Name = "Наличие DbContext", Selected = false },
+        new CriteriaOption { Id = "config", Name = "Конфигурационные файлы", Selected = true }
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -103,27 +189,21 @@
             var historyJson = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "AnalysisHistory");
             if (!string.IsNullOrEmpty(historyJson))
             {
-                analysisHistory = JsonSerializer.Deserialize<List<AnalysisMessage>>(historyJson);
-            }
-            else
-            {
-                analysisHistory.Add(new AnalysisMessage
-                    {
-                        Text = "Введите путь к папке проекта, опциональный промпт (оставьте пустым для CI/CD проверок) и расширения для анализа.",
-                        Type = MessageType.Bot
-                    });
-                await SaveAnalysisHistory();
+                analysisHistory = JsonSerializer.Deserialize<List<AnalysisMessage>>(historyJson) ?? new();
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Ошибка при загрузке истории анализа: " + ex.Message);
+            Console.WriteLine("Ошибка при загрузке истории: " + ex.Message);
+        }
+
+        if (!analysisHistory.Any())
+        {
             analysisHistory.Add(new AnalysisMessage
                 {
-                    Text = "Ошибка при загрузке истории: " + ex.Message,
+                    Text = "Введите путь к папке проекта и выберите критерии для анализа.",
                     Type = MessageType.Bot
                 });
-            await SaveAnalysisHistory();
         }
     }
 
@@ -136,7 +216,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Ошибка при сохранении истории анализа: " + ex.Message);
+            Console.WriteLine("Ошибка при сохранении истории: " + ex.Message);
         }
     }
 
@@ -145,11 +225,44 @@
         analysisHistory.Clear();
         analysisHistory.Add(new AnalysisMessage
             {
-                Text = "Введите путь к папке проекта, опциональный промпт (оставьте пустым для CI/CD проверок) и расширения для анализа.",
+                Text = "Введите путь к папке проекта и выберите критерии для анализа.",
                 Type = MessageType.Bot
             });
         await SaveAnalysisHistory();
         StateHasChanged();
+    }
+
+    private List<AnalysisCriteria> GetSelectedCriteria()
+    {
+        var criteria = new List<AnalysisCriteria>();
+
+        foreach (var option in availableCriteria.Where(o => o.Selected))
+        {
+            var criterion = new AnalysisCriteria
+                {
+                    Id = option.Id,
+                    Name = option.Name,
+                    Type = option.Id.Contains("config") || option.Id.Contains("migrations") ?
+                           CriteriaType.FullContent : CriteriaType.Structural
+                };
+
+            // Добавляем правила в зависимости от критерия
+            criterion.Rules.Add(option.Id switch
+            {
+                "controllers" => new CriteriaRule { Property = "controllers", Operator = "exists" },
+                "min_controllers" => new CriteriaRule { Property = "controllers", Operator = "count_greater_than", Value = 3 },
+                "pages" => new CriteriaRule { Property = "pages", Operator = "exists" },
+                "min_pages" => new CriteriaRule { Property = "pages", Operator = "count_greater_than", Value = 2 },
+                "migrations" => new CriteriaRule { Property = "migrations", Operator = "exists" },
+                "dbcontext" => new CriteriaRule { Property = "dbcontext", Operator = "exists" },
+                "config" => new CriteriaRule { Property = "config", Operator = "exists" },
+                _ => new CriteriaRule { Property = option.Id, Operator = "exists" }
+            });
+
+            criteria.Add(criterion);
+        }
+
+        return criteria;
     }
 
     private async Task StartAnalysis()
@@ -158,74 +271,126 @@
             return;
 
         isAnalyzing = true;
+        var selectedCriteria = GetSelectedCriteria();
 
-        analysisHistory.Add(new AnalysisMessage
+        var userMessage = new AnalysisMessage
             {
-                Text = $"Папка: {folderPath}\nПромпт: {(string.IsNullOrWhiteSpace(prompt) ? "CI/CD режим" : prompt)}\nРасширения: {extensionsInput}",
                 Type = MessageType.User,
+                FolderPath = folderPath,
+                Mode = analysisMode,
+                Criteria = selectedCriteria.Select(c => c.Name).ToList(),
                 Timestamp = DateTime.Now.ToString("HH:mm:ss")
-            });
+            };
 
-        var extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList();
+        analysisHistory.Add(userMessage);
         await SaveAnalysisHistory();
         StateHasChanged();
 
         try
         {
-            var request = new
-            {
-                FolderPath = folderPath,
-                Prompt = prompt,
-                Extensions = extensions
-            };
+            var request = new AnalysisRequest
+                {
+                    FolderPath = folderPath,
+                    Mode = Enum.Parse<AnalysisMode>(analysisMode),
+                    Criteria = selectedCriteria,
+                    Extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList()
+                };
 
             var response = await Http.PostAsJsonAsync("https://localhost:7131/api/codeanalyzer/analyze", request);
 
             if (response.IsSuccessStatusCode)
             {
                 var result = await response.Content.ReadFromJsonAsync<AnalysisResponse>();
-                if (result != null && result.Success)
+                if (result?.Success == true)
                 {
                     analysisHistory.Add(new AnalysisMessage
                         {
-                            Text = result.Result ?? "Анализ завершен без результата",
                             Type = MessageType.Bot,
+                            Structure = result.Structure,
+                            Results = result.Results,
+                            Text = $"Анализ завершен за {result.AnalysisTime.TotalSeconds:F2} секунд",
                             Timestamp = DateTime.Now.ToString("HH:mm:ss")
-                        });
-                }
-                else
-                {
-                    analysisHistory.Add(new AnalysisMessage
-                        {
-                            Text = "Ошибка: Не удалось получить результат анализа",
-                            Type = MessageType.Bot
                         });
                 }
             }
             else
             {
-                var errorContent = await response.Content.ReadAsStringAsync();
                 analysisHistory.Add(new AnalysisMessage
                     {
-                        Text = $"Ошибка сервера: {response.StatusCode} - {errorContent}",
-                        Type = MessageType.Bot
+                        Type = MessageType.Bot,
+                        Text = $"Ошибка сервера: {response.StatusCode}",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss")
                     });
             }
-        }
-        catch (HttpRequestException ex)
-        {
-            analysisHistory.Add(new AnalysisMessage
-                {
-                    Text = $"Ошибка сети: {ex.Message}",
-                    Type = MessageType.Bot
-                });
         }
         catch (Exception ex)
         {
             analysisHistory.Add(new AnalysisMessage
                 {
+                    Type = MessageType.Bot,
                     Text = $"Ошибка: {ex.Message}",
-                    Type = MessageType.Bot
+                    Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                });
+        }
+        finally
+        {
+            isAnalyzing = false;
+            await SaveAnalysisHistory();
+            StateHasChanged();
+        }
+    }
+
+    private async Task AnalyzeStructureOnly()
+    {
+        if (string.IsNullOrWhiteSpace(folderPath))
+            return;
+
+        isAnalyzing = true;
+
+        analysisHistory.Add(new AnalysisMessage
+            {
+                Type = MessageType.User,
+                FolderPath = folderPath,
+                Mode = "Structural",
+                Criteria = new List<string> { "Только структура" },
+                Timestamp = DateTime.Now.ToString("HH:mm:ss")
+            });
+
+        await SaveAnalysisHistory();
+        StateHasChanged();
+
+        try
+        {
+            var request = new StructureAnalysisRequest
+                {
+                    FolderPath = folderPath,
+                    Extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList()
+                };
+
+            var response = await Http.PostAsJsonAsync("https://localhost:7131/api/codeanalyzer/analyze-structure", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<StructureAnalysisResponse>();
+                if (result?.Success == true)
+                {
+                    analysisHistory.Add(new AnalysisMessage
+                        {
+                            Type = MessageType.Bot,
+                            Structure = result.Structure,
+                            Text = $"Структурный анализ завершен. Файлов: {result.Summary.TotalFiles}, Контроллеров: {result.Summary.Controllers}, Страниц: {result.Summary.Pages}",
+                            Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                        });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            analysisHistory.Add(new AnalysisMessage
+                {
+                    Type = MessageType.Bot,
+                    Text = $"Ошибка: {ex.Message}",
+                    Timestamp = DateTime.Now.ToString("HH:mm:ss")
                 });
         }
         finally
@@ -241,79 +406,33 @@
         if (string.IsNullOrEmpty(markdownText))
             return string.Empty;
 
-        // Обработка заголовков
-        var formatted = Regex.Replace(markdownText, @"^###\s+(.+)$", "<h3>$1</h3>", RegexOptions.Multiline);
-        formatted = Regex.Replace(formatted, @"^##\s+(.+)$", "<h2>$1</h2>", RegexOptions.Multiline);
-        formatted = Regex.Replace(formatted, @"^#\s+(.+)$", "<h1>$1</h1>", RegexOptions.Multiline);
-
-        // Обработка жирного текста
-        formatted = Regex.Replace(formatted, @"\*\*(.*?)\*\*", "<strong>$1</strong>");
-        formatted = Regex.Replace(formatted, @"__(.*?)__", "<strong>$1</strong>");
-
-        // Обработка курсива
+        // Базовая обработка markdown
+        var formatted = Regex.Replace(markdownText, @"\*\*(.*?)\*\*", "<strong>$1</strong>");
         formatted = Regex.Replace(formatted, @"\*(.*?)\*", "<em>$1</em>");
-        formatted = Regex.Replace(formatted, @"_(.*?)_", "<em>$1</em>");
-
-        // Обработка списков
-        formatted = Regex.Replace(formatted, @"^\-\s+(.+)$", "<li>$1</li>", RegexOptions.Multiline);
-        formatted = Regex.Replace(formatted, @"^\*\s+(.+)$", "<li>$1</li>", RegexOptions.Multiline);
-
-        // Группировка элементов списка в ul
-        formatted = Regex.Replace(formatted, @"(<li>.*</li>\s*)+", "<ul>$0</ul>");
-
-        // Обработка нумерованных списков
-        formatted = Regex.Replace(formatted, @"^\d+\.\s+(.+)$", "<li>$1</li>", RegexOptions.Multiline);
-        formatted = Regex.Replace(formatted, @"(<li>.*</li>\s*)+", match =>
-        {
-            var items = match.Value;
-            if (Regex.IsMatch(items, @"^\d+\."))
-                return "<ol>" + items + "</ol>";
-            else
-                return "<ul>" + items + "</ul>";
-        });
-
-        // Обработка блоков кода
-        formatted = Regex.Replace(formatted, @"```(\w+)?\s*(.*?)```", "<pre><code>$2</code></pre>", RegexOptions.Singleline);
-        formatted = Regex.Replace(formatted, @"`(.+?)`", "<code>$1</code>");
-
-        // Обработка разделителей
-        formatted = Regex.Replace(formatted, @"^\s*---\s*$", "<hr />", RegexOptions.Multiline);
-
-        // Обработка ссылок
-        formatted = Regex.Replace(formatted, @"\[([^\]]+)\]\(([^)]+)\)", "<a href=\"$2\">$1</a>");
-
-        // Обработка переносов строк (замена на <br>)
+        formatted = Regex.Replace(formatted, @"`(.*?)`", "<code>$1</code>");
         formatted = Regex.Replace(formatted, @"\n", "<br />");
-
-        // Обработка эмодзи и специальных символов
-        formatted = Regex.Replace(formatted, @"📊", "<span class=\"emoji\">📊</span>");
-        formatted = Regex.Replace(formatted, @"🛠️", "<span class=\"emoji\">🛠️</span>");
-        formatted = Regex.Replace(formatted, @"🔹", "<span class=\"emoji\">🔹</span>");
-        formatted = Regex.Replace(formatted, @"🎯", "<span class=\"emoji\">🎯</span>");
-        formatted = Regex.Replace(formatted, @"📄", "<span class=\"emoji\">📄</span>");
-        formatted = Regex.Replace(formatted, @"📋", "<span class=\"emoji\">📋</span>");
-        formatted = Regex.Replace(formatted, @"📈", "<span class=\"emoji\">📈</span>");
-        formatted = Regex.Replace(formatted, @"🔍", "<span class=\"emoji\">🔍</span>");
-        formatted = Regex.Replace(formatted, @"🧠", "<span class=\"emoji\">🧠</span>");
-        formatted = Regex.Replace(formatted, @"🔄", "<span class=\"emoji\">🔄</span>");
-        formatted = Regex.Replace(formatted, @"❌", "<span class=\"emoji error\">❌</span>");
-        formatted = Regex.Replace(formatted, @"✅", "<span class=\"emoji success\">✅</span>");
 
         return formatted;
     }
 
+    // Вспомогательные классы для UI
     public class AnalysisMessage
     {
         public string Text { get; set; } = string.Empty;
         public MessageType Type { get; set; }
+        public string FolderPath { get; set; } = string.Empty;
+        public string Mode { get; set; } = string.Empty;
+        public List<string> Criteria { get; set; } = new();
+        public ProjectStructure Structure { get; set; } = new();
+        public List<CriteriaCheckResult> Results { get; set; } = new();
         public string Timestamp { get; set; } = string.Empty;
     }
 
-    public class AnalysisResponse
+    public class CriteriaOption
     {
-        public bool Success { get; set; }
-        public string Result { get; set; } = string.Empty;
-        public string Error { get; set; } = string.Empty;
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public bool Selected { get; set; }
     }
 
     public enum MessageType
@@ -324,16 +443,153 @@
 }
 
 <style>
-    /* Стили остаются без изменений, но добавим для Pass/Fail */
-    .formatted-content strong {
-        color: #2c3e50;
+    /* Стили остаются такими же */
+    .analyzer-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
     }
 
-    .emoji.success {
-        color: #27ae60;
+    .analyzer-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
     }
 
-    .emoji.error {
-        color: #e74c3c;
+    .input-form {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    .form-control {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+
+    .criteria-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 10px;
+    }
+
+    .criterion-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .analysis-history {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 20px 0;
+    }
+
+    .user-message, .bot-message {
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 8px;
+    }
+
+    .user-message {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
+    }
+
+    .bot-message {
+        background: #f5f5f5;
+        border-left: 4px solid #4caf50;
+    }
+
+    .message-header {
+        margin-bottom: 10px;
+    }
+
+    .message-timestamp {
+        margin-top: 10px;
+        text-align: right;
+        color: #666;
+    }
+
+    .structure-summary, .criteria-results {
+        margin-bottom: 15px;
+    }
+
+    .result-item {
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 4px;
+        border-left: 4px solid;
+    }
+
+        .result-item.passed {
+            background: #e8f5e8;
+            border-left-color: #4caf50;
+        }
+
+        .result-item.failed {
+            background: #ffebee;
+            border-left-color: #f44336;
+        }
+
+    .status-badge {
+        float: right;
+        font-weight: bold;
+    }
+
+    .input-container {
+        display: flex;
+        gap: 10px;
+    }
+
+    .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .btn-primary {
+        background: #007bff;
+        color: white;
+    }
+
+    .btn-secondary {
+        background: #6c757d;
+        color: white;
+    }
+
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .spinner {
+        border: 2px solid #f3f3f3;
+        border-top: 2px solid #3498db;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        animation: spin 2s linear infinite;
+        display: inline-block;
+        margin-right: 10px;
+    }
+
+    @@keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+
+        100% {
+            transform: rotate(360deg);
+        }
     }
 </style>
