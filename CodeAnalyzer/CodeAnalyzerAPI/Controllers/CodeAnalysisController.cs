@@ -26,7 +26,7 @@ namespace CodeAnalyzerAPI.Controllers
         }
 
         [HttpPost("analyze")]
-        public async Task<IActionResult> Analyze([FromBody] AnalyzeRequest request)
+        public async Task<IActionResult> Analyze([FromBody] AnalysisRequest request)
         {
             _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Режим={Mode}",
                 request.FolderPath, request.Mode);
@@ -37,16 +37,29 @@ namespace CodeAnalyzerAPI.Controllers
                 return BadRequest("Ошибка: путь к папке обязателен.");
             }
 
-            _logger.LogInformation("Инициализация CodeAnalyzer...");
-            var analyzer = new CodeAnalyzer(_ollama, _logger);
-
             try
             {
                 _logger.LogInformation("Начало анализа для папки: {FolderPath}", request.FolderPath);
-                var result = await analyzer.AnalyzeWithFullAccessAsync(
+
+                // Читаем файлы из папки
+                var filesContent = await ReadFilesFromFolderAsync(
                     request.FolderPath,
-                    request.Mode == AnalysisMode.FullContent ? "ci/cd" : "структурный анализ",
                     request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
+
+                if (filesContent.Count == 0 || filesContent.ContainsKey("error"))
+                {
+                    string errorMessage = filesContent.GetValueOrDefault("error", "Файлы не найдены");
+                    _logger.LogWarning("Файлы не найдены или произошла ошибка: {ErrorMessage}", errorMessage);
+                    return BadRequest(new { success = false, error = errorMessage });
+                }
+
+                _logger.LogInformation("Найдено и обработано {FileCount} файлов для анализа.", filesContent.Count);
+
+                // Формируем промпт для анализа
+                string prompt = CreateAnalysisPrompt(filesContent, request.Mode);
+
+                // Отправляем запрос к Ollama
+                var result = await AskOllamaAsync(prompt);
 
                 _logger.LogInformation("Анализ успешно завершен.");
                 return Ok(new { success = true, result = result });
@@ -65,7 +78,6 @@ namespace CodeAnalyzerAPI.Controllers
 
             try
             {
-                // Используем зарегистрированный сервис вместо создания нового
                 var structure = await _structureAnalyzer.AnalyzeStructureAsync(
                     request.FolderPath,
                     request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
@@ -100,84 +112,6 @@ namespace CodeAnalyzerAPI.Controllers
                 _logger.LogError(ex, "Ошибка при структурном анализе");
                 return StatusCode(500, new { success = false, error = ex.Message });
             }
-        }
-
-        [HttpGet("check-ollama")]
-        public async Task<IActionResult> CheckOllama()
-        {
-            try
-            {
-                _logger.LogInformation("Проверка подключения к Ollama...");
-
-                // Простая проверка как в вашем рабочем примере
-                var requestOptions = new RequestOptions
-                {
-                    Temperature = 0.1f,
-                    NumPredict = 1,
-                    TopK = 40,
-                    TopP = 0.9f
-                };
-
-                var response = await _ollama.Completions.GenerateCompletionAsync(
-                    model: "llama2",
-                    prompt: "test",
-                    stream: false,
-                    options: requestOptions);
-
-                var available = response != null && !string.IsNullOrEmpty(response.Response);
-                _logger.LogInformation("Ollama доступен: {Available}", available);
-
-                return Ok(new
-                {
-                    available = available,
-                    status = available ? "Ollama доступен" : "Ollama недоступен"
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка при проверке Ollama");
-                return Ok(new
-                {
-                    available = false,
-                    status = "Ollama недоступен",
-                    error = ex.Message
-                });
-            }
-        }
-    }
-
-    public class AnalyzeRequest
-    {
-        public string FolderPath { get; set; } = string.Empty;
-        public AnalysisMode Mode { get; set; } = AnalysisMode.Structural;
-        public List<string> Extensions { get; set; } = new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" };
-    }
-
-    public class StructureAnalysisRequest
-    {
-        public string FolderPath { get; set; } = string.Empty;
-        public List<string> Extensions { get; set; } = new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" };
-    }
-
-    public class CodeAnalyzer
-    {
-        private readonly OllamaApiClient _client;
-        private readonly string _model = "deepseek-coder:6.7b";
-        private readonly ILogger<CodeAnalyzerController> _logger;
-
-        private readonly List<string> _ciCdCriteria = new List<string>
-        {
-            "Количество и качество контроллеров: Подсчитай количество контроллеров, проверь наличие атрибутов ([ApiController], [Route]), обработку ошибок, структуру действий.",
-            "Наличие подключения к БД: Проверь наличие DbContext, connection strings в конфигурации, вызовов services.AddDbContext.",
-            "Структура проекта: Оцени общую архитектуру (разделение на слои, использование DI, наличие сервисов).",
-            "Наличие миграций: Проверь наличие файлов миграций и команд выполнения миграций.",
-            "Качество кода: Проверь наличие комментариев, последовательность именования, соответствие best practices."
-        };
-
-        public CodeAnalyzer(OllamaApiClient client, ILogger<CodeAnalyzerController> logger)
-        {
-            _client = client ?? throw new ArgumentNullException(nameof(client));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         private async Task<Dictionary<string, string>> ReadFilesFromFolderAsync(string folderPath, List<string> extensions, int maxFileSize = 100000)
@@ -216,7 +150,7 @@ namespace CodeAnalyzerAPI.Controllers
 
                     try
                     {
-                        string content = await File.ReadAllTextAsync(filePath);
+                        string content = await System.IO.File.ReadAllTextAsync(filePath); // Явно указываем System.IO.File
                         string relPath = Path.GetRelativePath(folder, filePath);
                         filesContent[relPath] = content;
                         _logger.LogInformation("Успешно прочитан файл: {RelPath}, Длина содержимого: {ContentLength}", relPath, content.Length);
@@ -237,162 +171,69 @@ namespace CodeAnalyzerAPI.Controllers
             }
         }
 
-        public async Task<string> AnalyzeWithFullAccessAsync(string folderPath, string userPrompt, List<string> fileExtensions)
+        private string CreateAnalysisPrompt(Dictionary<string, string> filesContent, AnalysisMode mode)
         {
-            _logger.LogInformation("Начало AnalyzeWithFullAccessAsync: Путь={FolderPath}, Промпт={Prompt}, Расширения={Extensions}",
-                folderPath, userPrompt, string.Join(", ", fileExtensions));
+            var filesContext = new StringBuilder("СОДЕРЖИМОЕ ФАЙЛОВ ПРОЕКТА:\n\n");
 
-            var filesContent = await ReadFilesFromFolderAsync(folderPath, fileExtensions);
-
-            if (filesContent.Count == 0 || filesContent.ContainsKey("error"))
-            {
-                string errorMessage = filesContent.GetValueOrDefault("error", "Файлы не найдены");
-                _logger.LogWarning("Файлы не найдены или произошла ошибка: {ErrorMessage}", errorMessage);
-                return $"❌ Ошибка: {errorMessage}";
-            }
-
-            _logger.LogInformation("Найдено и обработано {FileCount} файлов для анализа.", filesContent.Count);
-
-            bool isCiCdMode = string.IsNullOrWhiteSpace(userPrompt) || userPrompt.ToLowerInvariant() == "ci/cd";
-
-            string result;
-            if (filesContent.Count <= 5)
-            {
-                _logger.LogInformation("Анализ небольшого набора из {FileCount} файлов.", filesContent.Count);
-                result = await AnalyzeSmallBatchAsync(filesContent, userPrompt, isCiCdMode);
-            }
-            else
-            {
-                _logger.LogInformation("Анализ большой кодовой базы с {FileCount} файлами.", filesContent.Count);
-                result = await AnalyzeLargeCodebaseAsync(filesContent, userPrompt, isCiCdMode);
-            }
-
-            _logger.LogInformation("Анализ завершен, длина результата: {ResultLength}", result.Length);
-            return result;
-        }
-
-        private async Task<string> AnalyzeSmallBatchAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode)
-        {
-            _logger.LogInformation("Начало AnalyzeSmallBatchAsync с {FileCount} файлами.", filesContent.Count);
-
-            var filesContext = new StringBuilder("СОДЕРЖИМОЕ ФАЙЛОВ:\n\n");
             foreach (var kvp in filesContent)
             {
-                filesContext.AppendLine($"🔹 ФАЙЛ: {kvp.Key}\n```csharp\n{kvp.Value}\n```\n");
+                // Ограничиваем длину содержимого файла для больших файлов
+                string content = kvp.Value.Length > 4000 ? kvp.Value.Substring(0, 4000) + "..." : kvp.Value;
+                filesContext.AppendLine($"🔹 ФАЙЛ: {kvp.Key}\n```csharp\n{content}\n```\n");
             }
 
-            string prompt;
-            if (isCiCdMode)
+            if (mode == AnalysisMode.FullContent)
             {
-                var checksSection = new StringBuilder("Выполни следующие проверки:\n\n");
-                for (int i = 0; i < _ciCdCriteria.Count; i++)
-                {
-                    checksSection.AppendLine($"{i + 1}. {_ciCdCriteria[i]}");
-                }
-
-                prompt = $"""
-Ты - опытный разработчик C#. Проанализируй содержимое файлов проекта.
-
-{checksSection}
+                return $"""
+Ты - опытный разработчик C# и архитектор ПО. Проанализируй содержимое файлов проекта и дай развернутую оценку.
 
 {filesContext}
 
-Проанализируй КАЖДЫЙ файл полностью. Учитывай все детали: код, структура, атрибуты, логику.
-В конце дай общий итог и рекомендации.
+Проведи детальный анализ по следующим аспектам:
+1. Архитектура проекта и структура
+2. Качество кода и соответствие best practices
+3. Наличие и качество контроллеров API
+4. Работа с базой данных (DbContext, миграции)
+5. Использование Dependency Injection
+6. Обработка ошибок и валидация
+7. Безопасность и аутентификация
+8. Общие рекомендации по улучшению
+
+Дай развернутый ответ с конкретными примерами из кода.
 """;
             }
             else
             {
-                prompt = $"""
-Ты - опытный разработчик C#. Проанализируй содержимое файлов проекта.
-
-ЗАДАЧА: {userPrompt}
+                return $"""
+Ты - опытный разработчик C#. Проанализируй структуру проекта на основе предоставленных файлов.
 
 {filesContext}
 
-Проанализируй КАЖДЫЙ файл полностью и дай точный ответ на вопрос.
+Сделай структурный анализ проекта:
+- Общая архитектура и организация кода
+- Основные компоненты и их назначение
+- Зависимости между модулями
+- Ключевые технологии и фреймворки
+- Потенциальные проблемы архитектуры
+
+Дай краткий, но информативный анализ.
 """;
             }
-
-            _logger.LogDebug("Сгенерирован промпт для анализа, длина: {PromptLength}", prompt.Length);
-            return await AskOllamaAsync(prompt, 8000);
         }
 
-        private async Task<string> AnalyzeLargeCodebaseAsync(Dictionary<string, string> filesContent, string userPrompt, bool isCiCdMode)
+        private async Task<string> AskOllamaAsync(string prompt)
         {
-            _logger.LogInformation("Начало AnalyzeLargeCodebaseAsync с {FileCount} файлами.", filesContent.Count);
-
-            // Для больших проектов анализируем только ключевые файлы
-            var keyFiles = filesContent
-                .Where(kvp =>
-                    kvp.Key.Contains("Controller") ||
-                    kvp.Key.Contains("Context") ||
-                    kvp.Key.Contains("Program.cs") ||
-                    kvp.Key.Contains("Startup.cs"))
-                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Length > 4000 ? kvp.Value.Substring(0, 4000) + "..." : kvp.Value);
-
-            if (!keyFiles.Any())
-            {
-                keyFiles = filesContent.Take(10).ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Length > 4000 ? kvp.Value.Substring(0, 4000) + "..." : kvp.Value);
-            }
-
-            var keyFilesContext = new StringBuilder();
-            foreach (var kvp in keyFiles)
-            {
-                keyFilesContext.AppendLine($"\n🎯 ФАЙЛ: {kvp.Key}\n```csharp\n{kvp.Value}\n```");
-            }
-
-            string prompt;
-            if (isCiCdMode)
-            {
-                prompt = $"""
-Ты - опытный разработчик C#. Проанализируй ключевые файлы большого проекта.
-
-КЛЮЧЕВЫЕ ФАЙЛЫ:
-{keyFilesContext}
-
-Проанализируй архитектуру проекта, наличие контроллеров, подключение к БД, общую структуру.
-Дай оценку качества кода и рекомендации по улучшению.
-""";
-            }
-            else
-            {
-                prompt = $"""
-Ты - опытный разработчик C#. Проанализируй ключевые файлы большого проекта.
-
-ВОПРОС: {userPrompt}
-
-КЛЮЧЕВЫЕ ФАЙЛЫ:
-{keyFilesContext}
-
-Дай ответ на вопрос на основе анализа ключевых файлов.
-""";
-            }
-
-            return await AskOllamaAsync(prompt, 6000);
-        }
-
-        private async Task<string> AskOllamaAsync(string prompt, int maxTokens)
-        {
-            _logger.LogInformation("Начало AskOllamaAsync с maxTokens: {MaxTokens}", maxTokens);
-
-            var requestOptions = new RequestOptions
-            {
-                Temperature = 0.1f,
-                NumPredict = maxTokens,
-                TopK = 40,
-                TopP = 0.9f
-            };
+            _logger.LogInformation("Начало AskOllamaAsync, длина промпта: {PromptLength}", prompt.Length);
 
             try
             {
-                _logger.LogDebug("Отправка запроса к Ollama API с моделью: {Model}", _model);
+                _logger.LogDebug("Отправка запроса к Ollama API с моделью: deepseek-v3.1:671b-cloud");
 
-                var response = await _client.Completions.GenerateCompletionAsync(
-                    model: _model,
+                // Используем тот же подход, что и в рабочем ChatBotController
+                var response = await _ollama.Completions.GenerateCompletionAsync(
+                    model: "deepseek-v3.1:671b-cloud",
                     prompt: prompt,
-                    stream: false,
-                    options: requestOptions);
+                    stream: false);
 
                 _logger.LogInformation("Вызов Ollama API завершен, длина ответа: {ResponseLength}", response.Response.Length);
                 return response.Response;
@@ -400,7 +241,7 @@ namespace CodeAnalyzerAPI.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Ошибка при вызове Ollama API: {Message}", ex.Message);
-                return $"❌ Ошибка Ollama: {ex.Message}";
+                return $"❌ Ошибка при анализе кода: {ex.Message}";
             }
         }
     }
