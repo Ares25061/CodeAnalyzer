@@ -30,12 +30,11 @@ namespace CodeAnalyzerAPI
             });
 
             // Ollama client - ПРАВИЛЬНАЯ настройка
-            builder.Services.AddSingleton<OllamaApiClient>(provider =>
+            builder.Services.AddSingleton(s =>
             {
-                // Создаем HttpClient и передаем его в OllamaApiClient
                 var httpClient = new HttpClient
                 {
-                    BaseAddress = new Uri("http://localhost:11434/")
+                    BaseAddress = new Uri("https://domainollamaforproject-ru.tail8590fc.ts.net/api/")
                 };
                 return new OllamaApiClient(httpClient);
             });
