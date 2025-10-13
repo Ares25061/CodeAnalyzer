@@ -33,6 +33,14 @@
             </div>
 
             <div class="form-group">
+                <label>Использовать Ollama для анализа:</label>
+                <div>
+                    <input type="checkbox" @bind="useOllama" id="useOllama" />
+                    <label for="useOllama" style="margin-left: 8px;">Использовать AI-анализ</label>
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label>Критерии проверки:</label>
                 <div class="criteria-list">
                     @foreach (var criterion in availableCriteria)
@@ -78,6 +86,7 @@
                             <p><strong>Папка:</strong> @message.FolderPath</p>
                             <p><strong>Режим:</strong> @message.Mode</p>
                             <p><strong>Критерии:</strong> @string.Join(", ", message.Criteria)</p>
+                            <p><strong>Ollama:</strong> @(message.UseOllama ? "Да" : "Нет")</p>
                         </div>
                     }
                     else
@@ -92,6 +101,10 @@
                                     <p>📄 Страниц: @message.Structure.TotalPages</p>
                                     <p>🔄 Миграций: @message.Structure.Migrations.Count</p>
                                     <p>🗄️ DbContext: @message.Structure.DbContexts.Count</p>
+                                    @if (message.Structure.HasDatabaseConnection)
+                                    {
+                                        <p>✅ Подключение к БД: Найдено</p>
+                                    }
                                 </div>
                             }
 
@@ -124,7 +137,16 @@
 
                             @if (!string.IsNullOrEmpty(message.Text))
                             {
-                                @((MarkupString)FormatMarkdown(message.Text))
+                                @if (message.Text.Contains("❌ Ошибка"))
+                                {
+                                    <div class="error-message">
+                                        @((MarkupString)FormatMarkdown(message.Text))
+                                    </div>
+                                }
+                                else
+                                {
+                                    @((MarkupString)FormatMarkdown(message.Text))
+                                }
                             }
                         </div>
                     }
@@ -165,6 +187,7 @@
     private string analysisMode = "Structural";
     private string extensionsInput = ".cs,.razor,.cshtml,.json";
     private bool isAnalyzing = false;
+    private bool useOllama = true;
 
     private List<CriteriaOption> availableCriteria = new()
     {
@@ -242,22 +265,50 @@
                 {
                     Id = option.Id,
                     Name = option.Name,
-                    Type = option.Id.Contains("config") || option.Id.Contains("migrations") ?
-                           CriteriaType.FullContent : CriteriaType.Structural
+                    Description = option.Name,
+                    Type = CriteriaType.Structural,
+                    CreatedAt = DateTime.UtcNow,
+                    Rules = new List<CriteriaRule>()
                 };
 
             // Добавляем правила в зависимости от критерия
-            criterion.Rules.Add(option.Id switch
-            {
-                "controllers" => new CriteriaRule { Property = "controllers", Operator = "exists" },
-                "min_controllers" => new CriteriaRule { Property = "controllers", Operator = "count_greater_than", Value = 3 },
-                "pages" => new CriteriaRule { Property = "pages", Operator = "exists" },
-                "min_pages" => new CriteriaRule { Property = "pages", Operator = "count_greater_than", Value = 2 },
-                "migrations" => new CriteriaRule { Property = "migrations", Operator = "exists" },
-                "dbcontext" => new CriteriaRule { Property = "dbcontext", Operator = "exists" },
-                "config" => new CriteriaRule { Property = "config", Operator = "exists" },
-                _ => new CriteriaRule { Property = option.Id, Operator = "exists" }
-            });
+            criterion.Rules.Add(new CriteriaRule
+                {
+                    Property = option.Id switch
+                    {
+                        "controllers" => "controllers",
+                        "min_controllers" => "controllers_count",
+                        "pages" => "pages",
+                        "min_pages" => "pages_count",
+                        "migrations" => "migrations",
+                        "dbcontext" => "dbcontext",
+                        "config" => "config_files",
+                        _ => option.Id
+                    },
+                    Operator = option.Id switch
+                    {
+                        "min_controllers" => "greater_than",
+                        "min_pages" => "greater_than",
+                        _ => "exists"
+                    },
+                    Value = option.Id switch
+                    {
+                        "min_controllers" => "3",
+                        "min_pages" => "2",
+                        _ => ""
+                    },
+                    ErrorMessage = option.Id switch
+                    {
+                        "controllers" => "Контроллеры не найдены",
+                        "min_controllers" => "Недостаточно контроллеров (требуется минимум 3)",
+                        "pages" => "Страницы не найдены",
+                        "min_pages" => "Недостаточно страниц (требуется минимум 2)",
+                        "migrations" => "Миграции не найдены",
+                        "dbcontext" => "DbContext не найден",
+                        "config" => "Конфигурационные файлы не найдены",
+                        _ => "Критерий не выполнен"
+                    }
+                });
 
             criteria.Add(criterion);
         }
@@ -279,6 +330,7 @@
                 FolderPath = folderPath,
                 Mode = analysisMode,
                 Criteria = selectedCriteria.Select(c => c.Name).ToList(),
+                UseOllama = useOllama,
                 Timestamp = DateTime.Now.ToString("HH:mm:ss")
             };
 
@@ -291,34 +343,48 @@
             var request = new AnalysisRequest
                 {
                     FolderPath = folderPath,
-                    Mode = Enum.Parse<AnalysisMode>(analysisMode),
+                    Mode = analysisMode == "Structural" ? AnalysisMode.Structural : AnalysisMode.FullContent,
                     Criteria = selectedCriteria,
-                    Extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList()
+                    Extensions = extensionsInput.Split(',').Select(e => e.Trim()).Where(e => !string.IsNullOrEmpty(e)).ToList(),
+                    UseOllama = useOllama
                 };
 
             var response = await Http.PostAsJsonAsync("https://localhost:7131/api/codeanalyzer/analyze", request);
 
             if (response.IsSuccessStatusCode)
             {
-                var result = await response.Content.ReadFromJsonAsync<AnalysisResponse>();
+                var resultJson = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<AnalysisResponse>(resultJson, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
                 if (result?.Success == true)
                 {
                     analysisHistory.Add(new AnalysisMessage
                         {
                             Type = MessageType.Bot,
-                            Structure = result.Structure,
-                            Results = result.Results,
-                            Text = $"Анализ завершен за {result.AnalysisTime.TotalSeconds:F2} секунд",
+                            Text = result.Result,
+                            Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                        });
+                }
+                else
+                {
+                    analysisHistory.Add(new AnalysisMessage
+                        {
+                            Type = MessageType.Bot,
+                            Text = result?.Error ?? "Неизвестная ошибка",
                             Timestamp = DateTime.Now.ToString("HH:mm:ss")
                         });
                 }
             }
             else
             {
+                var errorContent = await response.Content.ReadAsStringAsync();
                 analysisHistory.Add(new AnalysisMessage
                     {
                         Type = MessageType.Bot,
-                        Text = $"Ошибка сервера: {response.StatusCode}",
+                        Text = $"Ошибка сервера: {response.StatusCode}. {errorContent}",
                         Timestamp = DateTime.Now.ToString("HH:mm:ss")
                     });
             }
@@ -328,7 +394,7 @@
             analysisHistory.Add(new AnalysisMessage
                 {
                     Type = MessageType.Bot,
-                    Text = $"Ошибка: {ex.Message}",
+                    Text = $"Ошибка при выполнении запроса: {ex.Message}",
                     Timestamp = DateTime.Now.ToString("HH:mm:ss")
                 });
         }
@@ -353,6 +419,7 @@
                 FolderPath = folderPath,
                 Mode = "Structural",
                 Criteria = new List<string> { "Только структура" },
+                UseOllama = false,
                 Timestamp = DateTime.Now.ToString("HH:mm:ss")
             });
 
@@ -364,24 +431,47 @@
             var request = new StructureAnalysisRequest
                 {
                     FolderPath = folderPath,
-                    Extensions = extensionsInput.Split(',').Select(e => e.Trim()).ToList()
+                    Extensions = extensionsInput.Split(',').Select(e => e.Trim()).Where(e => !string.IsNullOrEmpty(e)).ToList()
                 };
 
             var response = await Http.PostAsJsonAsync("https://localhost:7131/api/codeanalyzer/analyze-structure", request);
 
             if (response.IsSuccessStatusCode)
             {
-                var result = await response.Content.ReadFromJsonAsync<StructureAnalysisResponse>();
+                var resultJson = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<StructureAnalysisResponse>(resultJson, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
                 if (result?.Success == true)
                 {
                     analysisHistory.Add(new AnalysisMessage
                         {
                             Type = MessageType.Bot,
                             Structure = result.Structure,
-                            Text = $"Структурный анализ завершен. Файлов: {result.Summary.TotalFiles}, Контроллеров: {result.Summary.Controllers}, Страниц: {result.Summary.Pages}",
+                            Text = $"Структурный анализ завершен. Файлов: {result.Summary?.TotalFiles ?? 0}, Контроллеров: {result.Summary?.Controllers ?? 0}, Страниц: {result.Summary?.Pages ?? 0}",
                             Timestamp = DateTime.Now.ToString("HH:mm:ss")
                         });
                 }
+                else
+                {
+                    analysisHistory.Add(new AnalysisMessage
+                        {
+                            Type = MessageType.Bot,
+                            Text = result?.Error ?? "Ошибка при структурном анализе",
+                            Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                        });
+                }
+            }
+            else
+            {
+                analysisHistory.Add(new AnalysisMessage
+                    {
+                        Type = MessageType.Bot,
+                        Text = $"Ошибка сервера: {response.StatusCode}",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                    });
             }
         }
         catch (Exception ex)
@@ -423,7 +513,8 @@
         public string FolderPath { get; set; } = string.Empty;
         public string Mode { get; set; } = string.Empty;
         public List<string> Criteria { get; set; } = new();
-        public ProjectStructure Structure { get; set; } = new();
+        public bool UseOllama { get; set; }
+        public ProjectStructure Structure { get; set; }
         public List<CriteriaCheckResult> Results { get; set; } = new();
         public string Timestamp { get; set; } = string.Empty;
     }
@@ -440,10 +531,53 @@
         User,
         Bot
     }
+
+    // Классы для запросов API
+    public class AnalysisRequest
+    {
+        public string FolderPath { get; set; } = string.Empty;
+        public List<AnalysisCriteria> Criteria { get; set; } = new();
+        public List<string> Extensions { get; set; } = new();
+        public AnalysisMode Mode { get; set; }
+        public bool UseOllama { get; set; }
+    }
+
+    public class StructureAnalysisRequest
+    {
+        public string FolderPath { get; set; } = string.Empty;
+        public List<string> Extensions { get; set; } = new();
+    }
+
+    public class AnalysisResponse
+    {
+        public bool Success { get; set; }
+        public string Result { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
+    }
+
+    public class StructureAnalysisResponse
+    {
+        public bool Success { get; set; }
+        public ProjectStructure Structure { get; set; }
+        public StructureSummary Summary { get; set; }
+        public string Error { get; set; } = string.Empty;
+    }
+
+    public class StructureSummary
+    {
+        public int TotalFiles { get; set; }
+        public int Controllers { get; set; }
+        public int Pages { get; set; }
+        public int Migrations { get; set; }
+        public int DbContexts { get; set; }
+        public int Services { get; set; }
+        public bool HasDatabaseConnection { get; set; }
+        public int DatabaseConnectionsCount { get; set; }
+        public int MigrationCommandsCount { get; set; }
+    }
 }
 
 <style>
-    /* Стили остаются такими же */
     .analyzer-container {
         max-width: 1200px;
         margin: 0 auto;
@@ -545,6 +679,14 @@
         font-weight: bold;
     }
 
+    .error-message {
+        color: #d32f2f;
+        background: #ffebee;
+        padding: 10px;
+        border-radius: 4px;
+        border-left: 4px solid #f44336;
+    }
+
     .input-container {
         display: flex;
         gap: 10px;
@@ -592,4 +734,17 @@
             transform: rotate(360deg);
         }
     }
+
+    .clear-history-btn {
+        background: #dc3545;
+        color: white;
+        border: none;
+        padding: 8px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+        .clear-history-btn:hover {
+            background: #c82333;
+        }
 </style>
