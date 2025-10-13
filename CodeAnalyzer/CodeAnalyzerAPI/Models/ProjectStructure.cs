@@ -25,6 +25,31 @@ namespace CodeAnalyzerAPI.Models
         public List<string> MigrationCommands { get; set; } = new List<string>();
         public bool OllamaAvailable { get; set; }
         public string OllamaStatus { get; set; } = "Не проверено";
+
+        // Новые методы для улучшенной фильтрации
+        public int GetControllersExcludingBase()
+        {
+            var excludedKeywords = new[] { "base" };
+            return Controllers.Count(c =>
+                !excludedKeywords.Any(keyword =>
+                    c.Name.Contains(keyword, System.StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public int GetControllersExcludingBaseAbstract()
+        {
+            var excludedKeywords = new[] { "base", "abstract", "generic" };
+            return Controllers.Count(c =>
+                !excludedKeywords.Any(keyword =>
+                    c.Name.Contains(keyword, System.StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public int GetControllersExcludingSpecific()
+        {
+            var excludedNames = new[] { "BaseController" };
+            return Controllers.Count(c =>
+                !excludedNames.Any(name =>
+                    c.Name.Equals(name, System.StringComparison.OrdinalIgnoreCase)));
+        }
     }
 
     public class ProjectFile

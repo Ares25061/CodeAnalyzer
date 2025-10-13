@@ -28,46 +28,271 @@ namespace CodeAnalyzerAPI.Controllers
         [HttpPost("analyze")]
         public async Task<IActionResult> Analyze([FromBody] AnalysisRequest request)
         {
-            _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Режим={Mode}",
-                request.FolderPath, request.Mode);
+            _logger.LogInformation("Получен запрос на анализ: Путь={FolderPath}, Критериев={CriteriaCount}, UseOllama={UseOllama}, HasPrompt={HasPrompt}",
+                request.FolderPath, request.Criteria?.Count ?? 0, request.UseOllama, !string.IsNullOrEmpty(request.CustomPrompt));
 
             if (string.IsNullOrWhiteSpace(request.FolderPath))
             {
-                _logger.LogWarning("Недействительный запрос: Путь к папке пуст.");
-                return BadRequest("Ошибка: путь к папке обязателен.");
+                return BadRequest(new { success = false, error = "Путь к папке обязателен" });
             }
 
             try
             {
-                _logger.LogInformation("Начало анализа для папки: {FolderPath}", request.FolderPath);
-
-                // Читаем файлы из папки
-                var filesContent = await ReadFilesFromFolderAsync(
+                // Сначала получаем структуру проекта
+                var structure = await _structureAnalyzer.AnalyzeStructureAsync(
                     request.FolderPath,
                     request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
 
-                if (filesContent.Count == 0 || filesContent.ContainsKey("error"))
+                if (!string.IsNullOrEmpty(structure.Error))
                 {
-                    string errorMessage = filesContent.GetValueOrDefault("error", "Файлы не найдены");
-                    _logger.LogWarning("Файлы не найдены или произошла ошибка: {ErrorMessage}", errorMessage);
-                    return BadRequest(new { success = false, error = errorMessage });
+                    return BadRequest(new { success = false, error = structure.Error });
                 }
 
-                _logger.LogInformation("Найдено и обработано {FileCount} файлов для анализа.", filesContent.Count);
+                // Проверяем критерии
+                var criteriaResults = CheckCriteria(request.Criteria, structure);
 
-                // Формируем промпт для анализа
-                string prompt = CreateAnalysisPrompt(filesContent, request.Mode);
+                // Если нужен AI-анализ
+                string aiAnalysis = string.Empty;
+                if (request.UseOllama)
+                {
+                    aiAnalysis = await GetAIAnalysis(request.Criteria, criteriaResults, structure, request.CustomPrompt);
+                }
 
-                // Отправляем запрос к Ollama
-                var result = await AskOllamaAsync(prompt);
+                var response = new
+                {
+                    success = true,
+                    structure = new
+                    {
+                        totalFiles = structure.TotalFiles,
+                        controllers = structure.TotalControllers,
+                        pages = structure.TotalPages,
+                        migrations = structure.Migrations.Count,
+                        dbContexts = structure.DbContexts.Count,
+                        services = structure.Services.Count,
+                        controllerNames = structure.Controllers.Select(c => c.Name).ToList(),
+                        fileNames = structure.Files.Select(f => f.Name).ToList()
+                    },
+                    criteriaResults = criteriaResults,
+                    aiAnalysis = aiAnalysis,
+                    summary = new
+                    {
+                        totalCriteria = criteriaResults.Count,
+                        passedCriteria = criteriaResults.Count(r => r.Passed),
+                        failedCriteria = criteriaResults.Count(r => !r.Passed),
+                        message = $"Проверено критериев: {criteriaResults.Count}, Выполнено: {criteriaResults.Count(r => r.Passed)}"
+                    }
+                };
 
-                _logger.LogInformation("Анализ успешно завершен.");
-                return Ok(new { success = true, result = result });
+                return Ok(response);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при анализе папки: {FolderPath}. Подробности: {Message}", request.FolderPath, ex.Message);
+                _logger.LogError(ex, "Ошибка при анализе папки: {FolderPath}", request.FolderPath);
                 return StatusCode(500, new { success = false, error = ex.Message });
+            }
+        }
+
+        private List<CriteriaCheckResult> CheckCriteria(List<AnalysisCriteria> criteria, ProjectStructure structure)
+        {
+            var results = new List<CriteriaCheckResult>();
+
+            if (criteria == null || !criteria.Any())
+                return results;
+
+            foreach (var criterion in criteria)
+            {
+                var result = new CriteriaCheckResult
+                {
+                    CriteriaId = criterion.Id,
+                    CriteriaName = criterion.Name,
+                    Passed = false,
+                    Message = "Критерий не проверен"
+                };
+
+                try
+                {
+                    // Проверяем каждое правило критерия
+                    bool allRulesPassed = true;
+                    var evidence = new List<string>();
+
+                    foreach (var rule in criterion.Rules)
+                    {
+                        bool rulePassed = CheckRule(rule, structure, out string ruleMessage);
+                        if (!rulePassed)
+                            allRulesPassed = false;
+
+                        evidence.Add(ruleMessage);
+                    }
+
+                    result.Passed = allRulesPassed;
+                    result.Message = allRulesPassed ? "✅ Критерий выполнен" : "❌ Критерий не выполнен";
+                    result.Evidence = evidence;
+                }
+                catch (Exception ex)
+                {
+                    result.Message = $"Ошибка проверки критерия: {ex.Message}";
+                    result.Evidence = new List<string> { $"Исключение: {ex.Message}" };
+                }
+
+                results.Add(result);
+            }
+
+            return results;
+        }
+
+        private bool CheckRule(CriteriaRule rule, ProjectStructure structure, out string message)
+        {
+            int actualValue = GetPropertyValue(rule.Property, structure);
+
+            // Исправление: правильное преобразование object в int
+            int expectedValue = 0;
+            if (rule.Value != null)
+            {
+                if (rule.Value is int intValue)
+                {
+                    expectedValue = intValue;
+                }
+                else if (rule.Value is string stringValue)
+                {
+                    int.TryParse(stringValue, out expectedValue);
+                }
+                else
+                {
+                    int.TryParse(rule.Value.ToString(), out expectedValue);
+                }
+            }
+
+            switch (rule.Operator.ToLower())
+            {
+                case "equals":
+                    message = $"{rule.Property}: {actualValue} == {expectedValue}";
+                    return actualValue == expectedValue;
+
+                case "greater_than":
+                    message = $"{rule.Property}: {actualValue} > {expectedValue}";
+                    return actualValue > expectedValue;
+
+                case "greater_than_or_equal":
+                    message = $"{rule.Property}: {actualValue} >= {expectedValue}";
+                    return actualValue >= expectedValue;
+
+                case "less_than":
+                    message = $"{rule.Property}: {actualValue} < {expectedValue}";
+                    return actualValue < expectedValue;
+
+                case "less_than_or_equal":
+                    message = $"{rule.Property}: {actualValue} <= {expectedValue}";
+                    return actualValue <= expectedValue;
+
+                case "exists":
+                    message = $"{rule.Property}: {actualValue} (должен существовать)";
+                    return actualValue > 0;
+
+                default:
+                    message = $"Неизвестный оператор: {rule.Operator}";
+                    return false;
+            }
+        }
+
+        private int GetPropertyValue(string property, ProjectStructure structure)
+        {
+            return property.ToLower() switch
+            {
+                "controllers_count" or "controllers" => structure.TotalControllers,
+                "controllers_count_excluding_base" => GetControllersExcludingBase(structure),
+                "controllers_count_excluding_base_abstract" => GetControllersExcludingBaseAbstract(structure),
+                "controllers_count_excluding_specific" => GetControllersExcludingSpecific(structure),
+                "pages_count" or "pages" => structure.TotalPages,
+                "dbcontext_count" or "dbcontext" => structure.DbContexts.Count,
+                "migrations_count" or "migrations" => structure.Migrations.Count,
+                "services_count" or "services" => structure.Services.Count,
+                "files_count" or "files" => structure.TotalFiles,
+                _ => 0
+            };
+        }
+
+        private int GetControllersExcludingBase(ProjectStructure structure)
+        {
+            var excludedKeywords = new[] { "base" };
+            return structure.Controllers.Count(c =>
+                !excludedKeywords.Any(keyword =>
+                    c.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private int GetControllersExcludingBaseAbstract(ProjectStructure structure)
+        {
+            var excludedKeywords = new[] { "base", "abstract", "generic" };
+            return structure.Controllers.Count(c =>
+                !excludedKeywords.Any(keyword =>
+                    c.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private int GetControllersExcludingSpecific(ProjectStructure structure)
+        {
+            var excludedNames = new[] { "BaseController" };
+            return structure.Controllers.Count(c =>
+                !excludedNames.Any(name =>
+                    c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private async Task<string> GetAIAnalysis(List<AnalysisCriteria> criteria, List<CriteriaCheckResult> results, ProjectStructure structure, string customPrompt)
+        {
+            try
+            {
+                var basePrompt = $"""
+СТРУКТУРА ПРОЕКТА:
+- Файлов: {structure.TotalFiles}
+- Контроллеров: {structure.TotalControllers}
+- Страниц: {structure.TotalPages}
+- DbContext: {structure.DbContexts.Count}
+- Миграций: {structure.Migrations.Count}
+- Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
+- Имена файлов: {string.Join(", ", structure.Files.Select(f => f.Name).Take(10))}...
+
+КРИТЕРИИ ПРОВЕРКИ:
+{string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
+
+РЕЗУЛЬТАТЫ ПРОВЕРКИ:
+{string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
+
+""";
+
+                string finalPrompt;
+                if (!string.IsNullOrEmpty(customPrompt))
+                {
+                    finalPrompt = $"""
+{basePrompt}
+ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
+{customPrompt}
+
+ЗАДАЧА: Проанализируй проект согласно критериям и дополнительной инструкции пользователя.
+""";
+                }
+                else
+                {
+                    finalPrompt = $"""
+{basePrompt}
+ЗАДАЧА: Дай краткий итог по проверке критериев. Только факты, без лишнего анализа.
+Формат ответа:
+✅ Выполнено: X критериев
+❌ Не выполнено: Y критериев
+Основные проблемы: [перечисли проблемы]
+""";
+                }
+
+                _logger.LogInformation("Отправка промта к Ollama. Длина: {PromptLength}", finalPrompt.Length);
+
+                var response = await _ollama.Completions.GenerateCompletionAsync(
+                    model: "deepseek-v3.1:671b-cloud",
+                    prompt: finalPrompt,
+                    stream: false);
+
+                return response.Response?.Trim() ?? "Не удалось получить анализ";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при AI-анализе");
+                return $"Ошибка AI-анализа: {ex.Message}";
             }
         }
 
@@ -101,7 +326,8 @@ namespace CodeAnalyzerAPI.Controllers
                         services = structure.Services.Count,
                         hasDatabaseConnection = structure.HasDatabaseConnection,
                         databaseConnectionsCount = structure.DatabaseConnectionStrings.Count,
-                        migrationCommandsCount = structure.MigrationCommands.Count
+                        migrationCommandsCount = structure.MigrationCommands.Count,
+                        controllerNames = structure.Controllers.Select(c => c.Name).ToList()
                     },
                     databaseConnections = structure.DatabaseConnectionStrings,
                     migrationCommands = structure.MigrationCommands
@@ -111,137 +337,6 @@ namespace CodeAnalyzerAPI.Controllers
             {
                 _logger.LogError(ex, "Ошибка при структурном анализе");
                 return StatusCode(500, new { success = false, error = ex.Message });
-            }
-        }
-
-        private async Task<Dictionary<string, string>> ReadFilesFromFolderAsync(string folderPath, List<string> extensions, int maxFileSize = 100000)
-        {
-            var filesContent = new Dictionary<string, string>();
-            _logger.LogInformation("Чтение файлов из папки: {FolderPath}, Расширения: {Extensions}",
-                folderPath, string.Join(", ", extensions));
-
-            try
-            {
-                var folder = Path.GetFullPath(folderPath);
-                _logger.LogDebug("Разрешенный путь к папке: {Folder}", folder);
-
-                if (!Directory.Exists(folder))
-                {
-                    _logger.LogWarning("Папка не существует: {Folder}", folder);
-                    return new Dictionary<string, string> { { "error", $"Папка {folder} не существует" } };
-                }
-
-                var filePaths = Directory.EnumerateFiles(folder, "*.*", SearchOption.AllDirectories)
-                    .Where(file => extensions.Contains(Path.GetExtension(file).ToLowerInvariant()))
-                    .ToList();
-
-                _logger.LogInformation("Найдено {FileCount} файлов с подходящими расширениями.", filePaths.Count);
-
-                foreach (var filePath in filePaths)
-                {
-                    var fileInfo = new FileInfo(filePath);
-                    _logger.LogDebug("Обработка файла: {FilePath}, Размер: {FileSize} байт", filePath, fileInfo.Length);
-
-                    if (fileInfo.Length > maxFileSize)
-                    {
-                        _logger.LogWarning("Пропуск файла {FilePath}, так как размер превышает {MaxFileSize} байт", filePath, maxFileSize);
-                        continue;
-                    }
-
-                    try
-                    {
-                        string content = await System.IO.File.ReadAllTextAsync(filePath); // Явно указываем System.IO.File
-                        string relPath = Path.GetRelativePath(folder, filePath);
-                        filesContent[relPath] = content;
-                        _logger.LogInformation("Успешно прочитан файл: {RelPath}, Длина содержимого: {ContentLength}", relPath, content.Length);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Ошибка при чтении файла: {FilePath}", filePath);
-                    }
-                }
-
-                _logger.LogInformation("Успешно прочитано {FileCount} файлов.", filesContent.Count);
-                return filesContent;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка при чтении файлов из папки: {FolderPath}", folderPath);
-                return new Dictionary<string, string> { { "error", ex.Message } };
-            }
-        }
-
-        private string CreateAnalysisPrompt(Dictionary<string, string> filesContent, AnalysisMode mode)
-        {
-            var filesContext = new StringBuilder("СОДЕРЖИМОЕ ФАЙЛОВ ПРОЕКТА:\n\n");
-
-            foreach (var kvp in filesContent)
-            {
-                // Ограничиваем длину содержимого файла для больших файлов
-                string content = kvp.Value.Length > 4000 ? kvp.Value.Substring(0, 4000) + "..." : kvp.Value;
-                filesContext.AppendLine($"🔹 ФАЙЛ: {kvp.Key}\n```csharp\n{content}\n```\n");
-            }
-
-            if (mode == AnalysisMode.FullContent)
-            {
-                return $"""
-Ты - опытный разработчик C# и архитектор ПО. Проанализируй содержимое файлов проекта и дай развернутую оценку.
-
-{filesContext}
-
-Проведи детальный анализ по следующим аспектам:
-1. Архитектура проекта и структура
-2. Качество кода и соответствие best practices
-3. Наличие и качество контроллеров API
-4. Работа с базой данных (DbContext, миграции)
-5. Использование Dependency Injection
-6. Обработка ошибок и валидация
-7. Безопасность и аутентификация
-8. Общие рекомендации по улучшению
-
-Дай развернутый ответ с конкретными примерами из кода.
-""";
-            }
-            else
-            {
-                return $"""
-Ты - опытный разработчик C#. Проанализируй структуру проекта на основе предоставленных файлов.
-
-{filesContext}
-
-Сделай структурный анализ проекта:
-- Общая архитектура и организация кода
-- Основные компоненты и их назначение
-- Зависимости между модулями
-- Ключевые технологии и фреймворки
-- Потенциальные проблемы архитектуры
-
-Дай краткий, но информативный анализ.
-""";
-            }
-        }
-
-        private async Task<string> AskOllamaAsync(string prompt)
-        {
-            _logger.LogInformation("Начало AskOllamaAsync, длина промпта: {PromptLength}", prompt.Length);
-
-            try
-            {
-                _logger.LogDebug("Отправка запроса к Ollama API с моделью: deepseek-v3.1:671b-cloud");
-
-                // Используем тот же подход, что и в рабочем ChatBotController
-                var response = await _ollama.Completions.GenerateCompletionAsync(
-                    model: "deepseek-v3.1:671b-cloud",
-                    prompt: prompt,
-                    stream: false);
-
-                _logger.LogInformation("Вызов Ollama API завершен, длина ответа: {ResponseLength}", response.Response.Length);
-                return response.Response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка при вызове Ollama API: {Message}", ex.Message);
-                return $"❌ Ошибка при анализе кода: {ex.Message}";
             }
         }
     }

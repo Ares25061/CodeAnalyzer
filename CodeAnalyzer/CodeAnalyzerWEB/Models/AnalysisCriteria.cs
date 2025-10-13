@@ -1,5 +1,4 @@
-﻿// CodeAnalyzerWEB/Models/AnalysisCriteria.cs
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace CodeAnalyzerWEB.Models
