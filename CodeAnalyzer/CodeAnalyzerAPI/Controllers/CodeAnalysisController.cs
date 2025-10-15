@@ -25,6 +25,11 @@ namespace CodeAnalyzerAPI.Controllers
             _structureAnalyzer = structureAnalyzer ?? throw new ArgumentNullException(nameof(structureAnalyzer));
         }
 
+        /// <summary>
+        /// Полный анализ кодовой базы проекта с проверкой критериев и AI-анализом
+        /// </summary>
+        /// <param name="request">Запрос на анализ проекта</param>
+        /// <returns>Результаты анализа структуры, проверки критериев и AI-анализ</returns>
         [HttpPost("analyze")]
         public async Task<IActionResult> Analyze([FromBody] AnalysisRequest request)
         {
@@ -85,6 +90,55 @@ namespace CodeAnalyzerAPI.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Ошибка при анализе папки: {FolderPath}", request.FolderPath);
+                return StatusCode(500, new { success = false, error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Анализ только структуры проекта без проверки критериев
+        /// </summary>
+        /// <param name="request">Запрос на анализ структуры</param>
+        /// <returns>Детальная информация о структуре проекта</returns>
+        [HttpPost("analyze-structure")]
+        public async Task<IActionResult> AnalyzeStructureOnly([FromBody] StructureAnalysisRequest request)
+        {
+            _logger.LogInformation("Структурный анализ: {FolderPath}", request.FolderPath);
+
+            try
+            {
+                var structure = await _structureAnalyzer.AnalyzeStructureAsync(
+                    request.FolderPath,
+                    request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
+
+                if (!string.IsNullOrEmpty(structure.Error))
+                {
+                    return BadRequest(new { success = false, error = structure.Error });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    structure = structure,
+                    summary = new
+                    {
+                        totalFiles = structure.TotalFiles,
+                        controllers = structure.TotalControllers,
+                        pages = structure.TotalPages,
+                        migrations = structure.Migrations.Count,
+                        dbContexts = structure.DbContexts.Count,
+                        services = structure.Services.Count,
+                        hasDatabaseConnection = structure.HasDatabaseConnection,
+                        databaseConnectionsCount = structure.DatabaseConnectionStrings.Count,
+                        migrationCommandsCount = structure.MigrationCommands.Count,
+                        controllerNames = structure.Controllers.Select(c => c.Name).ToList()
+                    },
+                    databaseConnections = structure.DatabaseConnectionStrings,
+                    migrationCommands = structure.MigrationCommands
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при структурном анализе");
                 return StatusCode(500, new { success = false, error = ex.Message });
             }
         }
@@ -231,29 +285,29 @@ namespace CodeAnalyzerAPI.Controllers
         }
 
         private async Task<string> GetAIAnalysis(
-    List<AnalysisCriteria> criteria,
-    List<CriteriaCheckResult> results,
-    ProjectStructure structure,
-    string customPrompt)
+            List<AnalysisCriteria> criteria,
+            List<CriteriaCheckResult> results,
+            ProjectStructure structure,
+            string customPrompt)
         {
             try
             {
                 var basePrompt = $"""
-            СТРУКТУРА ПРОЕКТА:
-            - Файлов: {structure.TotalFiles}
-            - Контроллеров: {structure.TotalControllers}
-            - Страниц: {structure.TotalPages}
-            - DbContext: {structure.DbContexts.Count}
-            - Миграций: {structure.Migrations.Count}
-            - Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
-            - Имена файлов: {string.Join(", ", structure.Files.Select(f => f.Name).Take(10))}...
+                СТРУКТУРА ПРОЕКТА:
+                - Файлов: {structure.TotalFiles}
+                - Контроллеров: {structure.TotalControllers}
+                - Страниц: {structure.TotalPages}
+                - DbContext: {structure.DbContexts.Count}
+                - Миграций: {structure.Migrations.Count}
+                - Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
+                - Имена файлов: {string.Join(", ", structure.Files.Select(f => f.Name).Take(10))}...
 
-            КРИТЕРИИ ПРОВЕРКИ:
-            {string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
+                КРИТЕРИИ ПРОВЕРКИ:
+                 {string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
 
-            РЕЗУЛЬТАТЫ ПРОВЕРКИ:
-            {string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
-            """;
+                РЕЗУЛЬТАТЫ ПРОВЕРКИ:
+                {string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
+                """;
 
                 string finalPrompt;
 
@@ -297,50 +351,6 @@ namespace CodeAnalyzerAPI.Controllers
             {
                 _logger.LogError(ex, "Ошибка при AI-анализе");
                 return $"Ошибка AI-анализа: {ex.Message}";
-            }
-        }
-
-        [HttpPost("analyze-structure")]
-        public async Task<IActionResult> AnalyzeStructureOnly([FromBody] StructureAnalysisRequest request)
-        {
-            _logger.LogInformation("Структурный анализ: {FolderPath}", request.FolderPath);
-
-            try
-            {
-                var structure = await _structureAnalyzer.AnalyzeStructureAsync(
-                    request.FolderPath,
-                    request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
-
-                if (!string.IsNullOrEmpty(structure.Error))
-                {
-                    return BadRequest(new { success = false, error = structure.Error });
-                }
-
-                return Ok(new
-                {
-                    success = true,
-                    structure = structure,
-                    summary = new
-                    {
-                        totalFiles = structure.TotalFiles,
-                        controllers = structure.TotalControllers,
-                        pages = structure.TotalPages,
-                        migrations = structure.Migrations.Count,
-                        dbContexts = structure.DbContexts.Count,
-                        services = structure.Services.Count,
-                        hasDatabaseConnection = structure.HasDatabaseConnection,
-                        databaseConnectionsCount = structure.DatabaseConnectionStrings.Count,
-                        migrationCommandsCount = structure.MigrationCommands.Count,
-                        controllerNames = structure.Controllers.Select(c => c.Name).ToList()
-                    },
-                    databaseConnections = structure.DatabaseConnectionStrings,
-                    migrationCommands = structure.MigrationCommands
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка при структурном анализе");
-                return StatusCode(500, new { success = false, error = ex.Message });
             }
         }
     }
