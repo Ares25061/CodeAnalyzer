@@ -12,8 +12,6 @@
                 <i class="bi bi-trash"></i>
             </button>
         </div>
-
-        <!-- Форма ввода -->
         <div class="input-form">
             <div class="form-group">
                 <label>Путь к папке проекта:</label>
@@ -63,7 +61,6 @@
             </div>
         </div>
 
-        <!-- Статус анализа -->
         <div class="analysis-status">
             @if (isAnalyzing)
             {
@@ -74,7 +71,6 @@
             }
         </div>
 
-        <!-- История анализа -->
         <ul class="analysis-history">
             @foreach (var message in analysisHistory)
             {
@@ -195,7 +191,6 @@
             }
         </ul>
 
-        <!-- Кнопки управления -->
         <div class="input-container">
             <button @onclick="StartAnalysis" disabled="@isAnalyzing" class="btn btn-primary">
                 @if (isAnalyzing)
@@ -306,7 +301,6 @@
                     Rules = new List<CriteriaRule>()
                 };
 
-            // Добавляем правила в зависимости от критерия
             criterion.Rules.Add(new CriteriaRule
                 {
                     Property = option.Id switch
@@ -535,7 +529,6 @@
         if (string.IsNullOrEmpty(markdownText))
             return string.Empty;
 
-        // Базовая обработка markdown
         var formatted = Regex.Replace(markdownText, @"\*\*(.*?)\*\*", "<strong>$1</strong>");
         formatted = Regex.Replace(formatted, @"\*(.*?)\*", "<em>$1</em>");
         formatted = Regex.Replace(formatted, @"`(.*?)`", "<code>$1</code>");

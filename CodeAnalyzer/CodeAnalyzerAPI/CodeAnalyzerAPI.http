@@ -1,6 +1,0 @@
-@CodeAnalyzerAPI_HostAddress = http://localhost:5288
-
-GET {{CodeAnalyzerAPI_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

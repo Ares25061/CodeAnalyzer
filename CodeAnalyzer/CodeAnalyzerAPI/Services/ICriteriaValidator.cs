@@ -1,5 +1,4 @@
-﻿// CodeAnalyzerAPI/Services/CriteriaValidator.cs
-using CodeAnalyzerLibrary;
+﻿using CodeAnalyzerLibrary;
 
 namespace CodeAnalyzerAPI.Services
 {
@@ -25,7 +24,6 @@ namespace CodeAnalyzerAPI.Services
 
             foreach (var criterion in criteria)
             {
-                // Пропускаем критерии полного анализа в структурном режиме
                 if (mode == AnalysisMode.Structural && criterion.Type == CriteriaType.FullContent)
                 {
                     results.Add(new CriteriaCheckResult
@@ -192,7 +190,6 @@ namespace CodeAnalyzerAPI.Services
 
         private CriteriaCheckResult ValidateConfig(ProjectStructure structure, CriteriaRule rule)
         {
-            // Здесь можно добавить проверку конфигурационных файлов
             var configFiles = structure.ConfigFiles.Where(f =>
                 f.Name.Contains("appsettings", StringComparison.OrdinalIgnoreCase)).ToList();
 

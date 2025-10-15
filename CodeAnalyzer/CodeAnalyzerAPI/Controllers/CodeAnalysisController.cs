@@ -38,7 +38,6 @@ namespace CodeAnalyzerAPI.Controllers
 
             try
             {
-                // Сначала получаем структуру проекта
                 var structure = await _structureAnalyzer.AnalyzeStructureAsync(
                     request.FolderPath,
                     request.Extensions ?? new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config" });
@@ -48,10 +47,8 @@ namespace CodeAnalyzerAPI.Controllers
                     return BadRequest(new { success = false, error = structure.Error });
                 }
 
-                // Проверяем критерии
                 var criteriaResults = CheckCriteria(request.Criteria, structure);
 
-                // Если нужен AI-анализ
                 string aiAnalysis = string.Empty;
                 if (request.UseOllama)
                 {
@@ -111,7 +108,6 @@ namespace CodeAnalyzerAPI.Controllers
 
                 try
                 {
-                    // Проверяем каждое правило критерия
                     bool allRulesPassed = true;
                     var evidence = new List<string>();
 
@@ -144,7 +140,6 @@ namespace CodeAnalyzerAPI.Controllers
         {
             int actualValue = GetPropertyValue(rule.Property, structure);
 
-            // Исправление: правильное преобразование object в int
             int expectedValue = 0;
             if (rule.Value != null)
             {
@@ -235,52 +230,61 @@ namespace CodeAnalyzerAPI.Controllers
                     c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
         }
 
-        private async Task<string> GetAIAnalysis(List<AnalysisCriteria> criteria, List<CriteriaCheckResult> results, ProjectStructure structure, string customPrompt)
+        private async Task<string> GetAIAnalysis(
+    List<AnalysisCriteria> criteria,
+    List<CriteriaCheckResult> results,
+    ProjectStructure structure,
+    string customPrompt)
         {
             try
             {
                 var basePrompt = $"""
-СТРУКТУРА ПРОЕКТА:
-- Файлов: {structure.TotalFiles}
-- Контроллеров: {structure.TotalControllers}
-- Страниц: {structure.TotalPages}
-- DbContext: {structure.DbContexts.Count}
-- Миграций: {structure.Migrations.Count}
-- Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
-- Имена файлов: {string.Join(", ", structure.Files.Select(f => f.Name).Take(10))}...
+            СТРУКТУРА ПРОЕКТА:
+            - Файлов: {structure.TotalFiles}
+            - Контроллеров: {structure.TotalControllers}
+            - Страниц: {structure.TotalPages}
+            - DbContext: {structure.DbContexts.Count}
+            - Миграций: {structure.Migrations.Count}
+            - Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
+            - Имена файлов: {string.Join(", ", structure.Files.Select(f => f.Name).Take(10))}...
 
-КРИТЕРИИ ПРОВЕРКИ:
-{string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
+            КРИТЕРИИ ПРОВЕРКИ:
+            {string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
 
-РЕЗУЛЬТАТЫ ПРОВЕРКИ:
-{string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
-
-""";
+            РЕЗУЛЬТАТЫ ПРОВЕРКИ:
+            {string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
+            """;
 
                 string finalPrompt;
+
                 if (!string.IsNullOrEmpty(customPrompt))
                 {
                     finalPrompt = $"""
-{basePrompt}
-ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
-{customPrompt}
+                {basePrompt}
 
-ЗАДАЧА: Проанализируй проект согласно критериям и дополнительной инструкции пользователя.
-""";
+                ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
+                {customPrompt}
+
+                ЗАДАЧА: Проанализируй проект согласно критериям и дополнительной инструкции пользователя.
+                """;
                 }
                 else
                 {
                     finalPrompt = $"""
-{basePrompt}
-ЗАДАЧА: Дай краткий итог по проверке критериев. Только факты, без лишнего анализа.
-Формат ответа:
-✅ Выполнено: X критериев
-❌ Не выполнено: Y критериев
-Основные проблемы: [перечисли проблемы]
-""";
+                {basePrompt}
+
+                ЗАДАЧА: Дай краткий итог по проверке критериев. Только факты, без лишнего анализа.
+
+                Формат ответа:
+                ✅ Выполнено: X критериев
+                ❌ Не выполнено: Y критериев
+                Основные проблемы: [перечисли проблемы]
+                """;
                 }
 
-                _logger.LogInformation("Отправка промта к Ollama. Длина: {PromptLength}", finalPrompt.Length);
+                _logger.LogInformation(
+                    "Отправка промта к Ollama. Длина: {PromptLength}",
+                    finalPrompt.Length);
 
                 var response = await _ollama.Completions.GenerateCompletionAsync(
                     model: "deepseek-v3.1:671b-cloud",

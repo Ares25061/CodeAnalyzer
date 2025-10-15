@@ -9,16 +9,13 @@ namespace CodeAnalyzerAPI
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Add services to the container.
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
-            // Register services
             builder.Services.AddScoped<IProjectStructureAnalyzer, ProjectStructureAnalyzer>();
             builder.Services.AddScoped<ICriteriaValidator, CriteriaValidator>();
 
-            // CORS
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowSpecificOrigins", builder =>
@@ -29,7 +26,6 @@ namespace CodeAnalyzerAPI
                 });
             });
 
-            // Ollama client - ÏÐÀÂÈËÜÍÀß íàñòðîéêà
             builder.Services.AddSingleton(s =>
             {
                 var httpClient = new HttpClient
@@ -40,8 +36,6 @@ namespace CodeAnalyzerAPI
             });
 
             var app = builder.Build();
-
-            // Configure the HTTP request pipeline.
             if (app.Environment.IsDevelopment())
             {
                 app.UseSwagger();
