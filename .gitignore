@@ -2,8 +2,10 @@
 .vscode/
 CodeAnalyzer/CodeAnalyzerAPI/bin/
 CodeAnalyzer/CodeAnalyzerWEB/bin/
+CodeAnalyzer/CodeAnalyzerLibrary/bin/
 CodeAnalyzer/CodeAnalyzerAPI/obj/
 CodeAnalyzer/CodeAnalyzerWEB/obj/
+CodeAnalyzer/CodeAnalyzerLibrary/obj/
 CodeAnalyzer/CodeAnalyzerAPI/appsettings.json
 CodeAnalyzer/CodeAnalyzerWEB/appsettings.json
 appsettings.json

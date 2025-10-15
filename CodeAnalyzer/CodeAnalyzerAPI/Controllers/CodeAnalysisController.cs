@@ -319,7 +319,53 @@ namespace CodeAnalyzerAPI.Controllers
                 !excludedNames.Any(name =>
                     c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
         }
+        /// <summary>
+        /// Проверка подключения к Ollama и работоспособности AI-модели
+        /// </summary>
+        /// <remarks>
+        /// Пример запроса:
+        ///
+        ///     GET /api/codeanalyzer/check-connection
+        ///
+        /// </remarks>
+        /// <returns>Результат проверки подключения</returns>
+        [HttpGet("check-connection")]
+        public async Task<IActionResult> CheckConnection()
+        {
+            try
+            {
+                _logger.LogInformation("Проверка подключения к Ollama");
 
+                var response = await _ollama.Completions.GenerateCompletionAsync(
+                    model: "deepseek-v3.1:671b-cloud",
+                    prompt: "Тебе необходимо написать лишь одно слово: Арбуз. Тебе не нужно на что то отвечать, просто напиши Арбуз.",
+                    stream: false);
+
+                var result = response.Response?.Trim();
+                var isConnected = string.Equals(result, "Арбуз", StringComparison.OrdinalIgnoreCase);
+
+                _logger.LogInformation("Результат проверки подключения: {Result}, Успешно: {IsConnected}", result, isConnected);
+
+                return Ok(new
+                {
+                    success = true,
+                    connected = isConnected,
+                    response = result,
+                    message = isConnected ? "Подключение к Ollama работает корректно" : "Некорректный ответ от Ollama"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при проверке подключения к Ollama");
+                return Ok(new
+                {
+                    success = false,
+                    connected = false,
+                    response = string.Empty,
+                    message = $"Ошибка подключения: {ex.Message}"
+                });
+            }
+        }
         private async Task<string> GetAIAnalysis(
             List<AnalysisCriteria> criteria,
             List<CriteriaCheckResult> results,

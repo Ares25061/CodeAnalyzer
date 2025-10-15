@@ -69,6 +69,13 @@
                     <span>Анализ выполняется...</span>
                 </div>
             }
+            @if (isCheckingConnection)
+            {
+                <div class="status-info">
+                    <div class="spinner"></div>
+                    <span>Проверка подключения к AI...</span>
+                </div>
+            }
         </div>
 
         <ul class="analysis-history">
@@ -217,6 +224,7 @@
     private string extensionsInput = ".cs,.razor,.cshtml,.json,.config";
     private string customPrompt = string.Empty;
     private bool isAnalyzing = false;
+    private bool isCheckingConnection = false;
     private bool useOllama = true;
 
     private List<CriteriaOption> availableCriteria = new()
@@ -345,10 +353,80 @@
         return criteria;
     }
 
+    private async Task<bool> CheckOllamaConnection()
+    {
+        try
+        {
+            isCheckingConnection = true;
+            StateHasChanged();
+
+            var response = await Http.GetAsync("https://localhost:7131/api/codeanalyzer/check-connection");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var resultJson = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<ConnectionCheckResponse>(resultJson, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
+                return result?.Connected == true;
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при проверке подключения: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            isCheckingConnection = false;
+            StateHasChanged();
+        }
+    }
+
     private async Task StartAnalysis()
     {
         if (string.IsNullOrWhiteSpace(folderPath))
             return;
+
+        if (useOllama)
+        {
+            analysisHistory.Add(new AnalysisMessage
+                {
+                    Type = MessageType.Bot,
+                    Text = "🔍 Проверка подключения к AI...",
+                    Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                });
+            await SaveAnalysisHistory();
+            StateHasChanged();
+
+            var isConnected = await CheckOllamaConnection();
+
+            if (!isConnected)
+            {
+                analysisHistory.Add(new AnalysisMessage
+                    {
+                        Type = MessageType.Bot,
+                        Text = "❌ Ошибка: Не удалось подключиться к AI-сервису. AI-анализ будет отключен.",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                    });
+                useOllama = false;
+            }
+            else
+            {
+                analysisHistory.Add(new AnalysisMessage
+                    {
+                        Type = MessageType.Bot,
+                        Text = "✅ Подключение к AI успешно установлено",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                    });
+            }
+            await SaveAnalysisHistory();
+            StateHasChanged();
+        }
 
         isAnalyzing = true;
         var selectedCriteria = GetSelectedCriteria();
@@ -538,6 +616,7 @@
 
         return formatted;
     }
+}
 }
 
 <style>
