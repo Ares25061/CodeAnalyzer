@@ -1,0 +1,731 @@
+﻿@page "/criteria-management"
+@inject IJSRuntime JSRuntime
+@inject HttpClient Http
+@using System.ComponentModel.DataAnnotations
+
+<h3>🗂️ Управление критериями анализа</h3>
+
+<div class="criteria-management">
+    <!-- Панель управления -->
+    <div class="management-toolbar">
+        <button class="btn btn-success" @onclick="ShowCreateDialog">
+            <i class="bi bi-plus-circle"></i> Создать критерий
+        </button>
+        <button class="btn btn-outline-secondary" @onclick="LoadTemplates">
+            <i class="bi bi-arrow-clockwise"></i> Обновить
+        </button>
+        <div class="search-box">
+            <input @bind="searchText" @bind:event="oninput" 
+                   placeholder="Поиск критериев..." class="form-control" />
+        </div>
+    </div>
+
+    <!-- Категории и шаблоны -->
+    <div class="criteria-content">
+        @if (isLoading)
+        {
+            <div class="loading-spinner">
+                <div class="spinner"></div>
+                <span>Загрузка критериев...</span>
+            </div>
+        }
+        else if (templates?.Any() != true)
+        {
+            <div class="empty-state">
+                <i class="bi bi-inboxes"></i>
+                <h4>Нет сохраненных критериев</h4>
+                <p>Создайте свой первый критерий для анализа проектов</p>
+                <button class="btn btn-primary" @onclick="ShowCreateDialog">
+                    Создать критерий
+                </button>
+            </div>
+        }
+        else
+        {
+            <!-- Список категорий -->
+            <div class="categories-sidebar">
+                <div class="category-list">
+                    <div class="category-item @(selectedCategory == "Все" ? "active" : "")" 
+                         @onclick='() => SelectCategory("Все")'>
+                        <span class="category-name">Все критерии</span>
+                        <span class="category-count">@templates.Count</span>
+                    </div>
+
+                    @foreach (var category in categories)
+                    {
+                        <div class="category-item @(selectedCategory == category.Name ? "active" : "")" 
+                             @onclick='() => SelectCategory(category.Name)'>
+                            <span class="category-name">@category.Name</span>
+                            <span class="category-count">@category.Count</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Список шаблонов -->
+            <div class="templates-list">
+                @foreach (var template in filteredTemplates)
+                {
+                    <div class="template-card">
+                        <div class="template-header">
+                            <div class="template-title">
+                                <h5>@template.Name</h5>
+                                <span class="badge @GetCategoryBadgeClass(template.Category)">@template.Category</span>
+                                <span class="badge @GetTypeBadgeClass(template.Type)">@template.Type</span>
+                                @if (!template.IsActive)
+                                {
+                                    <span class="badge bg-secondary">Неактивен</span>
+                                }
+                            </div>
+                            <div class="template-actions">
+                                <button class="btn btn-sm btn-outline-primary" @onclick='() => EditTemplate(template)'
+                                        title="Редактировать">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-success" @onclick='() => DuplicateTemplate(template)'
+                                        title="Дублировать">
+                                    <i class="bi bi-copy"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick='() => DeleteTemplate(template)'
+                                        title="Удалить">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="template-description">
+                            @template.Description
+                        </div>
+
+                        <div class="template-rules">
+                            <strong>Правила (@template.Rules.Count):</strong>
+                            <ul>
+                                @foreach (var rule in template.Rules.Take(3))
+                                {
+                                    <li>
+                                        <code>@rule.Property</code> 
+                                        <span class="rule-operator">@GetOperatorDisplayName(rule.Operator)</span>
+                                        <code>@rule.Value</code>
+                                    </li>
+                                }
+                                @if (template.Rules.Count > 3)
+                                {
+                                    <li>... и еще @(template.Rules.Count - 3) правил</li>
+                                }
+                            </ul>
+                        </div>
+
+                        <div class="template-footer">
+                            <small class="text-muted">
+                                Обновлен: @template.UpdatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+                            </small>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Диалог создания/редактирования -->
+@if (showEditDialog)
+{
+    <div class="modal-backdrop show"></div>
+    <div class="modal show" style="display: block;">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">@(editingTemplate?.Id == null ? "Создание критерия" : "Редактирование критерия")</h5>
+                    <button type="button" class="btn-close" @onclick="CloseEditDialog"></button>
+                </div>
+                
+                <div class="modal-body">
+                    <EditForm Model="editingTemplate" OnValidSubmit="SaveTemplate">
+                        <DataAnnotationsValidator />
+                        <ValidationSummary />
+                        
+                        <div class="form-group">
+                            <label for="template-name">Название критерия *</label>
+                            <InputText id="template-name" @bind="editingTemplate.Name" class="form-control" />
+                            <ValidationMessage For="@(() => editingTemplate.Name)" />
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="template-description">Описание *</label>
+                            <InputTextArea id="template-description" @bind="editingTemplate.Description" 
+                                         class="form-control" rows="3" />
+                            <ValidationMessage For="@(() => editingTemplate.Description)" />
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="template-category">Категория</label>
+                                    <InputSelect id="template-category" @bind="editingTemplate.Category" class="form-control">
+                                        <option value="Общие">Общие</option>
+                                        <option value="Архитектура">Архитектура</option>
+                                        <option value="Безопасность">Безопасность</option>
+                                        <option value="Производительность">Производительность</option>
+                                        <option value="Качество кода">Качество кода</option>
+                                        <option value="База данных">База данных</option>
+                                    </InputSelect>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="template-type">Тип критерия</label>
+                                    <InputSelect id="template-type" @bind="editingTemplate.Type" class="form-control">
+                                        <option value="Structural">Структурный</option>
+                                        <option value="FullContent">Полный анализ</option>
+                                    </InputSelect>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="template-priority">Приоритет</label>
+                                    <InputNumber id="template-priority" @bind="editingTemplate.Priority" 
+                                               class="form-control" min="1" max="10" />
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group form-check">
+                                    <InputCheckbox id="template-active" @bind="editingTemplate.IsActive" 
+                                                 class="form-check-input" />
+                                    <label class="form-check-label" for="template-active">Активный критерий</label>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Правила -->
+                        <div class="rules-section">
+                            <div class="section-header">
+                                <h6>Правила проверки *</h6>
+                                <button type="button" class="btn btn-sm btn-outline-primary" @onclick="AddRule">
+                                    <i class="bi bi-plus"></i> Добавить правило
+                                </button>
+                            </div>
+                            
+                            @for (int i = 0; i < editingTemplate.Rules.Count; i++)
+                            {
+                                var index = i;
+                                var rule = editingTemplate.Rules[i];
+                                
+                                <div class="rule-item">
+                                    <div class="rule-header">
+                                        <strong>Правило @(index + 1)</strong>
+                                        @if (editingTemplate.Rules.Count > 1)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                    @onclick='() => RemoveRule(index)'>
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        }
+                                    </div>
+                                    
+                                    <div class="row">
+                                        <div class="col-md-4">
+                                            <div class="form-group">
+                                                <label>Свойство</label>
+                                                <InputSelect @bind="rule.Property" class="form-control">
+                                                    <option value="controllers_count">Количество контроллеров</option>
+                                                    <option value="pages_count">Количество страниц</option>
+                                                    <option value="migrations_count">Количество миграций</option>
+                                                    <option value="dbcontext_count">Количество DbContext</option>
+                                                    <option value="services_count">Количество сервисов</option>
+                                                    <option value="files_count">Количество файлов</option>
+                                                </InputSelect>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="form-group">
+                                                <label>Оператор</label>
+                                                <InputSelect @bind="rule.Operator" class="form-control">
+                                                    <option value="equals">Равно</option>
+                                                    <option value="greater_than">Больше</option>
+                                                    <option value="greater_than_or_equal">Больше или равно</option>
+                                                    <option value="less_than">Меньше</option>
+                                                    <option value="less_than_or_equal">Меньше или равно</option>
+                                                    <option value="exists">Существует</option>
+                                                </InputSelect>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="form-group">
+                                                <label>Значение</label>
+                                                <InputNumber @bind="rule.Value" class="form-control" 
+                                                           disabled="@(rule.Operator == "exists")" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <label>Сообщение об ошибке</label>
+                                        <InputText @bind="rule.ErrorMessage" class="form-control" 
+                                                 placeholder="Сообщение при невыполнении правила" />
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </EditForm>
+                </div>
+                
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseEditDialog">Отмена</button>
+                    <button type="button" class="btn btn-primary" @onclick='() => SaveTemplate()'>Сохранить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<CriteriaTemplate> templates = new();
+    private List<CriteriaTemplate> filteredTemplates = new();
+    private List<CriteriaCategory> categories = new();
+    private bool isLoading = false;
+    private bool showEditDialog = false;
+    private CriteriaTemplate editingTemplate = new();
+    private string searchText = string.Empty;
+    private string selectedCategory = "Все";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTemplates();
+    }
+
+    private async Task LoadTemplates()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<CriteriaListResponse>("https://localhost:7131/api/criteriamanagement/templates");
+            if (response?.Success == true)
+            {
+                templates = response.Templates;
+                categories = response.Categories;
+                ApplyFilters();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при загрузке шаблонов: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        var query = templates.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = query.Where(t => 
+                t.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+                t.Description.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+                t.Category.Contains(searchText, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (selectedCategory != "Все")
+        {
+            query = query.Where(t => t.Category == selectedCategory);
+        }
+
+        filteredTemplates = query.ToList();
+    }
+
+    private void SelectCategory(string category)
+    {
+        selectedCategory = category;
+        ApplyFilters();
+        StateHasChanged();
+    }
+
+    private void ShowCreateDialog()
+    {
+        editingTemplate = new CriteriaTemplate
+        {
+            Category = "Общие",
+            Type = CriteriaType.Structural,
+            Priority = 1,
+            IsActive = true,
+            Rules = new List<CriteriaRule> { new CriteriaRule() }
+        };
+        showEditDialog = true;
+    }
+
+    private void EditTemplate(CriteriaTemplate template)
+    {
+        // Создаем глубокую копию для редактирования
+        editingTemplate = new CriteriaTemplate
+        {
+            Id = template.Id,
+            Name = template.Name,
+            Description = template.Description,
+            Type = template.Type,
+            Category = template.Category,
+            Priority = template.Priority,
+            IsActive = template.IsActive,
+            CreatedAt = template.CreatedAt,
+            UpdatedAt = template.UpdatedAt,
+            CreatedBy = template.CreatedBy,
+            Rules = template.Rules.Select(r => new CriteriaRule
+            {
+                Property = r.Property,
+                Operator = r.Operator,
+                Value = r.Value,
+                ErrorMessage = r.ErrorMessage
+            }).ToList()
+        };
+        showEditDialog = true;
+    }
+
+    private async Task SaveTemplate()
+    {
+        try
+        {
+            HttpResponseMessage response;
+            
+            if (string.IsNullOrEmpty(editingTemplate.Id))
+            {
+                response = await Http.PostAsJsonAsync(
+                    "https://localhost:7131/api/criteriamanagement/templates", 
+                    editingTemplate);
+            }
+            else
+            {
+                response = await Http.PutAsJsonAsync(
+                    $"https://localhost:7131/api/criteriamanagement/templates/{editingTemplate.Id}", 
+                    editingTemplate);
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadTemplates();
+                CloseEditDialog();
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                await JSRuntime.InvokeVoidAsync("alert", $"Ошибка при сохранении: {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"Ошибка: {ex.Message}");
+        }
+    }
+
+    private async Task DuplicateTemplate(CriteriaTemplate template)
+    {
+        try
+        {
+            var response = await Http.PostAsync(
+                $"https://localhost:7131/api/criteriamanagement/templates/{template.Id}/duplicate", 
+                null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadTemplates();
+            }
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"Ошибка при дублировании: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteTemplate(CriteriaTemplate template)
+    {
+        if (await JSRuntime.InvokeAsync<bool>("confirm", 
+            $"Вы уверены, что хотите удалить критерий \"{template.Name}\"?"))
+        {
+            try
+            {
+                var response = await Http.DeleteAsync(
+                    $"https://localhost:7131/api/criteriamanagement/templates/{template.Id}");
+
+                if (response.IsSuccessStatusCode)
+                {
+                    await LoadTemplates();
+                }
+            }
+            catch (Exception ex)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", $"Ошибка при удалении: {ex.Message}");
+            }
+        }
+    }
+
+    private void CloseEditDialog()
+    {
+        showEditDialog = false;
+        editingTemplate = new();
+    }
+
+    private void AddRule()
+    {
+        editingTemplate.Rules.Add(new CriteriaRule());
+        StateHasChanged();
+    }
+
+    private void RemoveRule(int index)
+    {
+        if (editingTemplate.Rules.Count > 1)
+        {
+            editingTemplate.Rules.RemoveAt(index);
+            StateHasChanged();
+        }
+    }
+
+    private string GetCategoryBadgeClass(string category)
+    {
+        return category switch
+        {
+            "Архитектура" => "bg-primary",
+            "Безопасность" => "bg-danger",
+            "Производительность" => "bg-warning",
+            "Качество кода" => "bg-success",
+            "База данных" => "bg-info",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetTypeBadgeClass(CriteriaType type)
+    {
+        return type == CriteriaType.Structural ? "bg-dark" : "bg-purple";
+    }
+
+    private string GetOperatorDisplayName(string operatorValue)
+    {
+        return operatorValue switch
+        {
+            "equals" => "=",
+            "greater_than" => ">",
+            "greater_than_or_equal" => ">=",
+            "less_than" => "<",
+            "less_than_or_equal" => "<=",
+            "exists" => "существует",
+            _ => operatorValue
+        };
+    }
+}
+
+<style>
+    .criteria-management {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    .management-toolbar {
+        display: flex;
+        gap: 15px;
+        margin-bottom: 25px;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 10px;
+        align-items: center;
+    }
+
+    .search-box {
+        flex: 1;
+        max-width: 300px;
+        margin-left: auto;
+    }
+
+    .criteria-content {
+        display: flex;
+        gap: 25px;
+        min-height: 600px;
+    }
+
+    .categories-sidebar {
+        width: 300px;
+        background: white;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .category-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .category-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 15px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        border: 2px solid transparent;
+    }
+
+        .category-item:hover {
+            background: #f8f9fa;
+            border-color: #e9ecef;
+        }
+
+        .category-item.active {
+            background: #007bff;
+            color: white;
+            border-color: #0056b3;
+        }
+
+    .category-name {
+        font-weight: 600;
+    }
+
+    .category-count {
+        background: rgba(255,255,255,0.2);
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+    }
+
+    .templates-list {
+        flex: 1;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+        gap: 20px;
+    }
+
+    .template-card {
+        background: white;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        border: 1px solid #e9ecef;
+        transition: all 0.2s ease;
+    }
+
+        .template-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+
+    .template-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 12px;
+    }
+
+    .template-title h5 {
+        margin: 0 0 8px 0;
+        color: #2c3e50;
+    }
+
+    .template-actions {
+        display: flex;
+        gap: 5px;
+    }
+
+    .template-description {
+        color: #6c757d;
+        margin-bottom: 15px;
+        line-height: 1.4;
+    }
+
+    .template-rules {
+        margin-bottom: 15px;
+    }
+
+        .template-rules ul {
+            margin: 8px 0 0 0;
+            padding-left: 20px;
+        }
+
+        .template-rules li {
+            margin-bottom: 4px;
+            color: #495057;
+        }
+
+    .rule-operator {
+        color: #6c757d;
+        font-style: italic;
+        margin: 0 5px;
+    }
+
+    .template-footer {
+        border-top: 1px solid #e9ecef;
+        padding-top: 12px;
+    }
+
+    .rules-section {
+        margin-top: 25px;
+    }
+
+    .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #f8f9fa;
+    }
+
+    .rule-item {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        border: 1px solid #e9ecef;
+    }
+
+    .rule-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+
+    .loading-spinner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 20px;
+        color: #6c757d;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #6c757d;
+    }
+
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: 20px;
+            color: #adb5bd;
+        }
+
+    .badge.bg-purple {
+        background: #6f42c1 !important;
+    }
+
+    .form-group {
+        margin-bottom: 1rem;
+    }
+
+    .modal {
+        z-index: 1050;
+    }
+
+    .modal-backdrop {
+        z-index: 1040;
+    }
+</style>

@@ -7,7 +7,7 @@
         public List<string> Extensions { get; set; } = new List<string> { ".cs", ".razor", ".cshtml", ".json", ".config", ".xml" };
         public AnalysisMode Mode { get; set; } = AnalysisMode.Structural;
         public bool UseOllama { get; set; } = true;
-        public string CustomPrompt { get; set; } = string.Empty; // Добавлено новое поле
+        public string CustomPrompt { get; set; } = string.Empty;
     }
 
     public class AnalysisResponse
@@ -18,8 +18,8 @@
         public string Error { get; set; } = string.Empty;
         public TimeSpan AnalysisTime { get; set; }
         public string OllamaStatus { get; set; } = string.Empty;
-        public string AiAnalysis { get; set; } = string.Empty; // Добавлено для AI анализа
-        public AnalysisSummary Summary { get; set; } = new AnalysisSummary(); // Добавлено для сводки
+        public string AiAnalysis { get; set; } = string.Empty; 
+        public AnalysisSummary Summary { get; set; } = new AnalysisSummary(); 
     }
 
     public class AnalysisSummary
@@ -59,8 +59,8 @@
         public int DatabaseConnectionsCount { get; set; }
         public int MigrationCommandsCount { get; set; }
         public bool OllamaAvailable { get; set; }
-        public List<string> ControllerNames { get; set; } = new List<string>(); // Добавлено для имен контроллеров
-        public List<string> FileNames { get; set; } = new List<string>(); // Добавлено для имен файлов
+        public List<string> ControllerNames { get; set; } = new List<string>(); 
+        public List<string> FileNames { get; set; } = new List<string>();
     }
 
     public enum AnalysisMode
