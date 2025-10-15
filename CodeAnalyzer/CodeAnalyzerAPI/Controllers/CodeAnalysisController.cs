@@ -28,6 +28,32 @@ namespace CodeAnalyzerAPI.Controllers
         /// <summary>
         /// Полный анализ кодовой базы проекта с проверкой критериев и AI-анализом
         /// </summary>
+        /// <remarks>
+        /// Пример запроса:
+        ///
+        ///     POST /api/codeanalyzer/analyze
+        ///     {
+        ///       "folderPath": "C:/Projects/MyProject",
+        ///       "useOllama": true,
+        ///       "customPrompt": "Проанализируй архитектуру проекта",
+        ///       "extensions": [".cs", ".razor", ".json"],
+        ///       "criteria": [
+        ///         {
+        ///           "id": 1,
+        ///           "name": "Проверка контроллеров",
+        ///           "description": "Должно быть не менее 2 контроллеров",
+        ///           "rules": [
+        ///             {
+        ///               "property": "controllers_count",
+        ///               "operator": "greater_than_or_equal",
+        ///               "value": 2
+        ///             }
+        ///           ]
+        ///         }
+        ///       ]
+        ///     }
+        ///
+        /// </remarks>
         /// <param name="request">Запрос на анализ проекта</param>
         /// <returns>Результаты анализа структуры, проверки критериев и AI-анализ</returns>
         [HttpPost("analyze")]
@@ -97,6 +123,16 @@ namespace CodeAnalyzerAPI.Controllers
         /// <summary>
         /// Анализ только структуры проекта без проверки критериев
         /// </summary>
+        /// <remarks>
+        /// Пример запроса:
+        ///
+        ///     POST /api/codeanalyzer/analyze-structure
+        ///     {
+        ///       "folderPath": "C:/Projects/MyProject",
+        ///       "extensions": [".cs", ".razor", ".cshtml"]
+        ///     }
+        ///
+        /// </remarks>
         /// <param name="request">Запрос на анализ структуры</param>
         /// <returns>Детальная информация о структуре проекта</returns>
         [HttpPost("analyze-structure")]

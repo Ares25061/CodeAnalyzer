@@ -1,5 +1,6 @@
 using CodeAnalyzerAPI.Services;
 using Ollama;
+using System.Reflection;
 
 namespace CodeAnalyzerAPI
 {
@@ -11,7 +12,25 @@ namespace CodeAnalyzerAPI
 
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+
+            builder.Services.AddSwaggerGen(c =>
+            {
+                // ¬ключаем XML-комментарии
+                var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+                var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+
+                if (File.Exists(xmlPath))
+                {
+                    c.IncludeXmlComments(xmlPath);
+                }
+
+                c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+                {
+                    Title = "Code Analyzer API",
+                    Version = "v1",
+                    Description = "API дл€ анализа структуры кода и проверки критериев качества"
+                });
+            });
 
             builder.Services.AddScoped<IProjectStructureAnalyzer, ProjectStructureAnalyzer>();
             builder.Services.AddScoped<ICriteriaValidator, CriteriaValidator>();
@@ -36,11 +55,11 @@ namespace CodeAnalyzerAPI
             });
 
             var app = builder.Build();
-            if (app.Environment.IsDevelopment())
+            app.UseSwagger();
+            app.UseSwaggerUI(c =>
             {
-                app.UseSwagger();
-                app.UseSwaggerUI();
-            }
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "Code Analyzer API v1");
+            });
 
             app.UseHttpsRedirection();
             app.UseCors("AllowSpecificOrigins");
