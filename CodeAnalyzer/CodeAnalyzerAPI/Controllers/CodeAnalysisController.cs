@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using CodeAnalyzerAPI.Models;
+using CodeAnalyzerLibrary;
 using CodeAnalyzerAPI.Services;
 using Ollama;
 using Microsoft.Extensions.Logging;

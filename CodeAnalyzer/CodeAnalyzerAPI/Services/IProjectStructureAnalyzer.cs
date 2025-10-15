@@ -1,5 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
-using CodeAnalyzerAPI.Models;
+using CodeAnalyzerLibrary;
 using System.Text.RegularExpressions;
 
 namespace CodeAnalyzerAPI.Services

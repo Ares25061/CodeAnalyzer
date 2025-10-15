@@ -1,6 +1,6 @@
 ﻿using System.Collections.Generic;
 
-namespace CodeAnalyzerWEB.Models
+namespace CodeAnalyzerLibrary
 {
     public class ProjectStructure
     {

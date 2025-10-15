@@ -1,5 +1,5 @@
 ﻿// CodeAnalyzerAPI/Services/CriteriaValidator.cs
-using CodeAnalyzerAPI.Models;
+using CodeAnalyzerLibrary;
 
 namespace CodeAnalyzerAPI.Services
 {

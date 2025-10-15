@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace CodeAnalyzerWEB.Models
+namespace CodeAnalyzerLibrary
 {
     public class AnalysisCriteria
     {

@@ -1,0 +1,11 @@
+C:\Users\User\Desktop\CodeAnalyzerLibrary\bin\Debug\net7.0\CodeAnalyzerLibrary.deps.json
+C:\Users\User\Desktop\CodeAnalyzerLibrary\bin\Debug\net7.0\CodeAnalyzerLibrary.dll
+C:\Users\User\Desktop\CodeAnalyzerLibrary\bin\Debug\net7.0\CodeAnalyzerLibrary.pdb
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\CodeAnalyzerLibrary.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\CodeAnalyzerLibrary.AssemblyInfoInputs.cache
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\CodeAnalyzerLibrary.AssemblyInfo.cs
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\CodeAnalyzerLibrary.csproj.CoreCompileInputs.cache
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\CodeAnalyzerLibrary.dll
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\refint\CodeAnalyzerLibrary.dll
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\CodeAnalyzerLibrary.pdb
+C:\Users\User\Desktop\CodeAnalyzerLibrary\obj\Debug\net7.0\ref\CodeAnalyzerLibrary.dll
