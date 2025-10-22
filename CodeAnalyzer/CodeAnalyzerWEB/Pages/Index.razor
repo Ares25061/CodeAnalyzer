@@ -12,6 +12,7 @@
                 <i class="bi bi-trash"></i>
             </button>
         </div>
+        
         <div class="input-form">
             <div class="form-group">
                 <label>Путь к папке проекта:</label>
@@ -48,14 +49,70 @@
 
             <div class="form-group">
                 <label>Критерии проверки:</label>
-                <div class="criteria-list">
-                    @foreach (var criterion in availableCriteria)
+                <div class="criteria-section">
+                    <div class="criteria-tabs">
+                        <button class="@(showStandardCriteria ? "tab-active" : "tab")" @onclick="ShowStandardCriteria">
+                            Стандартные
+                        </button>
+                        <button class="@(!showStandardCriteria ? "tab-active" : "tab")" @onclick="ShowCustomCriteria">
+                            Мои критерии (@customUserCriteria.Count)
+                        </button>
+                        <button class="btn btn-secondary" @onclick="ShowCustomCriteriaModal" style="margin-left: auto;">
+                            + Создать критерий
+                        </button>
+                    </div>
+
+                    @if (showStandardCriteria)
                     {
-                        <div class="criterion-item">
-                            <input type="checkbox"
-                                   @bind="criterion.Selected"
-                                   id="@criterion.Id" />
-                            <label for="@criterion.Id">@criterion.Name</label>
+                        <div class="criteria-list">
+                            @foreach (var criterion in standardCriteria)
+                            {
+                                <div class="criterion-item">
+                                    <input type="checkbox"
+                                           @bind="criterion.Selected"
+                                           id="@($"std_{criterion.Id}")" />
+                                    <label for="@($"std_{criterion.Id}")">@criterion.Name</label>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="criteria-list">
+                            @if (customUserCriteria.Any())
+                            {
+                                @foreach (var criterion in customUserCriteria)
+                                {
+                                    <div class="criterion-item custom-criterion">
+                                        <div class="criterion-header">
+                                            <input type="checkbox"
+                                                   @bind="criterion.Selected"
+                                                   id="@($"custom_{criterion.Id}")" />
+                                            <label for="@($"custom_{criterion.Id}")">
+                                                <span class="custom-badge">Пользовательский</span>
+                                                @criterion.Name
+                                            </label>
+                                            <div class="criterion-actions">
+                                                <button class="btn-icon" @onclick="() => EditCustomCriteria(criterion)" title="Редактировать">
+                                                    ✏️
+                                                </button>
+                                                <button class="btn-icon btn-danger" @onclick="() => DeleteCustomCriteria(criterion.Id)" title="Удалить">
+                                                    🗑️
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="no-criteria">
+                                    <p>У вас пока нет кастомных критериев</p>
+                                    <button class="btn btn-primary" @onclick="ShowCustomCriteriaModal">
+                                        Создать первый критерий
+                                    </button>
+                                </div>
+                            }
                         </div>
                     }
                 </div>
@@ -219,6 +276,69 @@
     </div>
 </div>
 
+@if (showCustomCriteriaModal)
+{
+    <div class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4>@(editingCriteria == null ? "Создание критерия" : "Редактирование критерия")</h4>
+                <button class="btn-close" @onclick="CloseCustomCriteriaModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Название критерия:</label>
+                    <input @bind="newCriteriaName" class="form-control" placeholder="Введите название критерия" />
+                </div>
+                <div class="form-group">
+                    <label>Описание:</label>
+                    <textarea @bind="newCriteriaDescription" class="form-control" placeholder="Введите описание критерия" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Правила:</label>
+                    <div class="rules-container">
+                        @foreach (var rule in newCriteriaRules)
+                        {
+                            <div class="rule-item">
+                                <div class="rule-row">
+                                    <select @bind="rule.Property" class="form-control">
+                                        <option value="controllers_count">Количество контроллеров</option>
+                                        <option value="pages_count">Количество страниц</option>
+                                        <option value="dbcontext_count">Количество DbContext</option>
+                                        <option value="migrations_count">Количество миграций</option>
+                                        <option value="services_count">Количество сервисов</option>
+                                        <option value="files_count">Количество файлов</option>
+                                        <option value="models_count">Количество моделей</option>
+                                        <option value="config_files_count">Количество конфигурационных файлов</option>
+                                        <option value="has_database_connection">Наличие подключения к БД</option>
+                                        <option value="database_connections_count">Количество подключений к БД</option>
+                                        <option value="migration_commands_count">Количество команд миграции</option>
+                                    </select>
+                                    <select @bind="rule.Operator" class="form-control">
+                                        <option value="exists">Существует</option>
+                                        <option value="equals">Равно</option>
+                                        <option value="greater_than">Больше чем</option>
+                                        <option value="greater_than_or_equal">Больше или равно</option>
+                                        <option value="less_than">Меньше чем</option>
+                                        <option value="less_than_or_equal">Меньше или равно</option>
+                                    </select>
+                                    <input @bind="rule.Value" class="form-control" placeholder="Значение" />
+                                    <button class="btn-icon btn-danger" @onclick="() => RemoveRule(rule)">×</button>
+                                </div>
+                                <input @bind="rule.ErrorMessage" class="form-control" placeholder="Сообщение об ошибке (опционально)" />
+                            </div>
+                        }
+                        <button class="btn btn-secondary" @onclick="AddRule">+ Добавить правило</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" @onclick="CloseCustomCriteriaModal">Отмена</button>
+                <button class="btn btn-primary" @onclick="SaveCustomCriteria">Сохранить</button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private List<AnalysisMessage> analysisHistory = new();
     private string folderPath = string.Empty;
@@ -227,21 +347,140 @@
     private string customPrompt = string.Empty;
     private bool isAnalyzing = false;
     private bool isCheckingConnection = false;
+    private bool showStandardCriteria = true;
+    private bool showCustomCriteriaModal = false;
+    private string newCriteriaName = string.Empty;
+    private string newCriteriaDescription = string.Empty;
+    private List<CriteriaRule> newCriteriaRules = new();
+    private AnalysisCriteria editingCriteria = null;
 
-    private List<CriteriaOption> availableCriteria = new()
+    private List<AnalysisCriteria> standardCriteria = new()
     {
-        new CriteriaOption { Id = "controllers", Name = "Наличие контроллеров", Selected = true },
-        new CriteriaOption { Id = "min_controllers", Name = "Минимум 3 контроллера", Selected = false },
-        new CriteriaOption { Id = "pages", Name = "Наличие страниц", Selected = true },
-        new CriteriaOption { Id = "min_pages", Name = "Минимум 2 страницы", Selected = false },
-        new CriteriaOption { Id = "migrations", Name = "Наличие миграций", Selected = false },
-        new CriteriaOption { Id = "dbcontext", Name = "Наличие DbContext", Selected = false },
-        new CriteriaOption { Id = "services", Name = "Наличие сервисов", Selected = false }
+        new AnalysisCriteria
+        {
+            Id = "controllers",
+            Name = "Наличие контроллеров",
+            Description = "Проверяет наличие контроллеров в проекте",
+            Type = CriteriaType.Structural,
+            Selected = true,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "controllers_count", Operator = "exists", Value = "1" }
+            }
+        },
+        new AnalysisCriteria
+        {
+            Id = "min_controllers",
+            Name = "Минимум 3 контроллера",
+            Description = "Проверяет, что в проекте не менее 3 контроллеров",
+            Type = CriteriaType.Structural,
+            Selected = false,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "controllers_count", Operator = "greater_than_or_equal", Value = "3" }
+            }
+        },
+        new AnalysisCriteria
+        {
+            Id = "pages",
+            Name = "Наличие страниц",
+            Description = "Проверяет наличие Razor/Blazor страниц",
+            Type = CriteriaType.Structural,
+            Selected = true,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "pages_count", Operator = "exists", Value = "1" }
+            }
+        },
+        new AnalysisCriteria
+        {
+            Id = "min_pages",
+            Name = "Минимум 2 страницы",
+            Description = "Проверяет, что в проекте не менее 2 страниц",
+            Type = CriteriaType.Structural,
+            Selected = false,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "pages_count", Operator = "greater_than_or_equal", Value = "2" }
+            }
+        },
+        new AnalysisCriteria
+        {
+            Id = "migrations",
+            Name = "Наличие миграций",
+            Description = "Проверяет наличие миграций Entity Framework",
+            Type = CriteriaType.Structural,
+            Selected = false,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "migrations_count", Operator = "exists", Value = "1" }
+            }
+        },
+        new AnalysisCriteria
+        {
+            Id = "dbcontext",
+            Name = "Наличие DbContext",
+            Description = "Проверяет наличие классов DbContext",
+            Type = CriteriaType.Structural,
+            Selected = false,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "dbcontext_count", Operator = "exists", Value = "1" }
+            }
+        },
+        new AnalysisCriteria
+        {
+            Id = "services",
+            Name = "Наличие сервисов",
+            Description = "Проверяет наличие сервисных классов",
+            Type = CriteriaType.Structural,
+            Selected = false,
+            Rules = new List<CriteriaRule>
+            {
+                new CriteriaRule { Property = "services_count", Operator = "exists", Value = "1" }
+            }
+        }
     };
+
+    private List<AnalysisCriteria> customUserCriteria = new();
 
     protected override async Task OnInitializedAsync()
     {
         await LoadAnalysisHistory();
+        await LoadCustomCriteria();
+    }
+
+    private async Task LoadCustomCriteria()
+    {
+        try
+        {
+            var criteriaJson = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "CustomCriteria");
+            if (!string.IsNullOrEmpty(criteriaJson))
+            {
+                customUserCriteria = JsonSerializer.Deserialize<List<AnalysisCriteria>>(criteriaJson) ?? new List<AnalysisCriteria>();
+                foreach (var criteria in customUserCriteria)
+                {
+                    criteria.Selected = true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Ошибка при загрузке кастомных критериев: " + ex.Message);
+        }
+    }
+
+    private async Task SaveCustomCriteriaToStorage()
+    {
+        try
+        {
+            var criteriaJson = JsonSerializer.Serialize(customUserCriteria);
+            await JSRuntime.InvokeVoidAsync("localStorage.setItem", "CustomCriteria", criteriaJson);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Ошибка при сохранении кастомных критериев: " + ex.Message);
+        }
     }
 
     private async Task LoadAnalysisHistory()
@@ -294,62 +533,116 @@
         StateHasChanged();
     }
 
+    private void ShowStandardCriteria()
+    {
+        showStandardCriteria = true;
+        StateHasChanged();
+    }
+
+    private void ShowCustomCriteria()
+    {
+        showStandardCriteria = false;
+        StateHasChanged();
+    }
+
+    private void ShowCustomCriteriaModal()
+    {
+        newCriteriaName = string.Empty;
+        newCriteriaDescription = string.Empty;
+        newCriteriaRules = new List<CriteriaRule> { new CriteriaRule() };
+        editingCriteria = null;
+        showCustomCriteriaModal = true;
+        StateHasChanged();
+    }
+
+    private void CloseCustomCriteriaModal()
+    {
+        showCustomCriteriaModal = false;
+        StateHasChanged();
+    }
+
+    private void AddRule()
+    {
+        newCriteriaRules.Add(new CriteriaRule());
+        StateHasChanged();
+    }
+
+    private void RemoveRule(CriteriaRule rule)
+    {
+        if (newCriteriaRules.Count > 1)
+        {
+            newCriteriaRules.Remove(rule);
+            StateHasChanged();
+        }
+    }
+
+    private void EditCustomCriteria(AnalysisCriteria criteria)
+    {
+        newCriteriaName = criteria.Name;
+        newCriteriaDescription = criteria.Description;
+        newCriteriaRules = criteria.Rules.ToList();
+        editingCriteria = criteria;
+        showCustomCriteriaModal = true;
+        StateHasChanged();
+    }
+
+    private async Task DeleteCustomCriteria(string criteriaId)
+    {
+        if (await JSRuntime.InvokeAsync<bool>("confirm", "Вы уверены, что хотите удалить этот критерий?"))
+        {
+            customUserCriteria.RemoveAll(c => c.Id == criteriaId);
+            await SaveCustomCriteriaToStorage();
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveCustomCriteria()
+    {
+        if (string.IsNullOrWhiteSpace(newCriteriaName))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Введите название критерия");
+            return;
+        }
+
+        if (newCriteriaRules.Any(r => string.IsNullOrEmpty(r.Property) || string.IsNullOrEmpty(r.Operator)))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Заполните все поля правил");
+            return;
+        }
+
+        if (editingCriteria == null)
+        {
+            var newCriteria = new AnalysisCriteria
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = newCriteriaName,
+                Description = newCriteriaDescription,
+                Type = CriteriaType.Structural,
+                Rules = newCriteriaRules,
+                IsCustom = true,
+                Selected = true,
+                CreatedAt = DateTime.UtcNow
+            };
+            customUserCriteria.Add(newCriteria);
+        }
+        else
+        {
+            editingCriteria.Name = newCriteriaName;
+            editingCriteria.Description = newCriteriaDescription;
+            editingCriteria.Rules = newCriteriaRules;
+        }
+
+        await SaveCustomCriteriaToStorage();
+        CloseCustomCriteriaModal();
+        StateHasChanged();
+    }
+
     private List<AnalysisCriteria> GetSelectedCriteria()
     {
         var criteria = new List<AnalysisCriteria>();
 
-        foreach (var option in availableCriteria.Where(o => o.Selected))
-        {
-            var criterion = new AnalysisCriteria
-            {
-                Id = option.Id,
-                Name = option.Name,
-                Description = option.Name,
-                Type = CriteriaType.Structural,
-                CreatedAt = DateTime.UtcNow,
-                Rules = new List<CriteriaRule>()
-            };
-
-            criterion.Rules.Add(new CriteriaRule
-            {
-                Property = option.Id switch
-                {
-                    "controllers" => "controllers_count",
-                    "min_controllers" => "controllers_count",
-                    "pages" => "pages_count",
-                    "min_pages" => "pages_count",
-                    "migrations" => "migrations_count",
-                    "dbcontext" => "dbcontext_count",
-                    "services" => "services_count",
-                    _ => option.Id
-                },
-                Operator = option.Id switch
-                {
-                    "min_controllers" => "greater_than_or_equal",
-                    "min_pages" => "greater_than_or_equal",
-                    _ => "exists"
-                },
-                Value = option.Id switch
-                {
-                    "min_controllers" => 3,
-                    "min_pages" => 2,
-                    _ => 1
-                },
-                ErrorMessage = option.Id switch
-                {
-                    "controllers" => "Контроллеры не найдены",
-                    "min_controllers" => "Недостаточно контроллеров (требуется минимум 3)",
-                    "pages" => "Страницы не найдены",
-                    "min_pages" => "Недостаточно страниц (требуется минимум 2)",
-                    "migrations" => "Миграции не найдены",
-                    "dbcontext" => "DbContext не найден",
-                    "services" => "Сервисы не найдены",
-                    _ => "Критерий не выполнен"
-                }
-            });
-
-            criteria.Add(criterion);
-        }
+        criteria.AddRange(standardCriteria.Where(c => c.Selected));
+        criteria.AddRange(customUserCriteria.Where(c => c.Selected));
 
         return criteria;
     }
@@ -391,7 +684,17 @@
     private async Task StartAnalysis()
     {
         if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Введите путь к папке проекта");
             return;
+        }
+
+        var selectedCriteria = GetSelectedCriteria();
+        if (!selectedCriteria.Any())
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Выберите хотя бы один критерий для проверки");
+            return;
+        }
 
         bool useOllama = analysisMode == "FullContent";
 
@@ -432,7 +735,7 @@
         }
 
         isAnalyzing = true;
-        var selectedCriteria = GetSelectedCriteria();
+        StateHasChanged();
 
         var userMessage = new AnalysisMessage
         {
@@ -535,7 +838,6 @@
         return formatted;
     }
 }
-
 <style>
     .analyzer-container {
         max-width: 1200px;
@@ -597,11 +899,52 @@
         min-height: 80px;
     }
 
+    .criteria-section {
+        border: 1px solid #e9ecef;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    .criteria-tabs {
+        display: flex;
+        background: #f8f9fa;
+        border-bottom: 1px solid #e9ecef;
+        padding: 10px;
+        align-items: center;
+    }
+
+    .tab {
+        padding: 8px 16px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        border-radius: 4px;
+        margin-right: 10px;
+    }
+
+    .tab-active {
+        padding: 8px 16px;
+        background: #007bff;
+        color: white;
+        border: none;
+        cursor: pointer;
+        font-weight: 600;
+        border-radius: 4px;
+        margin-right: 10px;
+    }
+
+    .tab:hover:not(.tab-active) {
+        background: #e9ecef;
+    }
+
     .criteria-list {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
         gap: 12px;
         margin-top: 10px;
+        padding: 15px;
     }
 
     .criterion-item {
@@ -623,6 +966,62 @@
         .criterion-item input[type="checkbox"] {
             transform: scale(1.2);
         }
+
+    .custom-criterion {
+        background: #f0f8ff;
+        border-left: 3px solid #007bff;
+    }
+
+    .criterion-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+    }
+
+    .custom-badge {
+        background: #007bff;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        margin-right: 8px;
+    }
+
+    .criterion-actions {
+        margin-left: auto;
+        display: flex;
+        gap: 5px;
+    }
+
+    .btn-icon {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+        transition: background 0.2s ease;
+        font-size: 14px;
+    }
+
+        .btn-icon:hover {
+            background: #e9ecef;
+        }
+
+    .btn-danger {
+        color: #dc3545;
+    }
+
+        .btn-danger:hover {
+            background: #f8d7da;
+        }
+
+    .no-criteria {
+        text-align: center;
+        padding: 40px 20px;
+        color: #6c757d;
+        grid-column: 1 / -1;
+    }
 
     .analysis-history {
         list-style: none;
@@ -936,5 +1335,76 @@
     .formatted-content em {
         color: #6c757d;
         font-style: italic;
+    }
+
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+
+    .modal-content {
+        background: white;
+        border-radius: 8px;
+        width: 90%;
+        max-width: 600px;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px;
+        border-bottom: 1px solid #e9ecef;
+    }
+
+    .modal-body {
+        padding: 20px;
+    }
+
+    .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        padding: 20px;
+        border-top: 1px solid #e9ecef;
+    }
+
+    .btn-close {
+        background: none;
+        border: none;
+        font-size: 24px;
+        cursor: pointer;
+        color: #6c757d;
+    }
+
+    .rules-container {
+        border: 1px solid #e9ecef;
+        border-radius: 6px;
+        padding: 15px;
+    }
+
+    .rule-item {
+        margin-bottom: 15px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 6px;
+    }
+
+    .rule-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr auto;
+        gap: 10px;
+        margin-bottom: 10px;
+        align-items: center;
     }
 </style>

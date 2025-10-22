@@ -183,25 +183,27 @@ namespace CodeAnalyzerAPI.Services
         private async Task DetectByContentAsync(ProjectFile file, FileDetectionResult result)
         {
             var content = file.Content;
-
-            if (content.Contains("[ApiController]") ||
-                content.Contains("ControllerBase") ||
-                (content.Contains("Microsoft.AspNetCore.Mvc") && content.Contains("Controller")))
+            if (content.Contains("abstract class") &&
+                (content.Contains("ControllerBase") || content.Contains("Controller")))
             {
-                if (!result.DetectedTypes.Contains(FileType.Controller) && !result.DetectedTypes.Contains(FileType.BaseController))
+                if (!result.DetectedTypes.Contains(FileType.BaseController))
                 {
-                    if (content.Contains("abstract class") || content.Contains("class.*Controller.*:"))
-                    {
-                        result.DetectedTypes.Add(FileType.BaseController);
-                        file.FoundPatterns.Add("Базовый контроллер (определено по содержимому)");
-                        result.Confidence = 0.8;
-                    }
-                    else
-                    {
-                        result.DetectedTypes.Add(FileType.Controller);
-                        file.FoundPatterns.Add("Содержит атрибуты контроллера");
-                        result.Confidence = Math.Max(result.Confidence, 0.95);
-                    }
+                    result.DetectedTypes.Add(FileType.BaseController);
+                    file.FoundPatterns.Add("Базовый контроллер (абстрактный класс)");
+                    result.Confidence = 0.9;
+                }
+            }
+            else if (content.Contains("[ApiController]") ||
+                     (content.Contains("ControllerBase") && !content.Contains("abstract class")) ||
+                     (content.Contains("Microsoft.AspNetCore.Mvc") &&
+                      content.Contains("Controller") &&
+                      !content.Contains("abstract")))
+            {
+                if (!result.DetectedTypes.Contains(FileType.Controller))
+                {
+                    result.DetectedTypes.Add(FileType.Controller);
+                    file.FoundPatterns.Add("Содержит атрибуты контроллера");
+                    result.Confidence = Math.Max(result.Confidence, 0.95);
                 }
             }
 

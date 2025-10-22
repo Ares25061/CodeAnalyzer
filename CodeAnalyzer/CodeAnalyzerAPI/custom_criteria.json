@@ -1,0 +1,25 @@
+[
+  {
+    "UserId": "anonymous",
+    "Criteria": [
+      {
+        "Id": "97c00b62-ab35-48f7-b390-401dc7c30a10",
+        "Name": "\u043D\u0430\u043B\u0438\u0447\u0438\u0435 6 \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u043B\u0435\u0440\u043E\u0432",
+        "Description": "\u043D\u0435\u043E\u0431\u0445\u043E\u0434\u0438\u043C\u043E \u043D\u0430\u043B\u0438\u0447\u0438\u0435 6 \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u043B\u0435\u0440\u043E\u0432",
+        "Type": 0,
+        "Rules": [
+          {
+            "Property": "controllers_count",
+            "Operator": "greater_than_or_equal",
+            "Value": "6",
+            "ErrorMessage": ""
+          }
+        ],
+        "CreatedAt": "2025-10-22T14:38:18.3394361Z",
+        "UserId": "anonymous",
+        "IsCustom": true,
+        "Selected": true
+      }
+    ]
+  }
+]

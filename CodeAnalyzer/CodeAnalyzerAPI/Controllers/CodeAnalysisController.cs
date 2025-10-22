@@ -192,32 +192,33 @@ namespace CodeAnalyzerAPI.Controllers
                 {
                     CriteriaId = criterion.Id,
                     CriteriaName = criterion.Name,
-                    Passed = false,
-                    Message = "Критерий не проверен"
+                    Passed = true,
+                    Message = "Критерий выполнен успешно",
+                    Evidence = new List<string>()
                 };
 
                 try
                 {
                     bool allRulesPassed = true;
-                    var evidence = new List<string>();
 
                     foreach (var rule in criterion.Rules)
                     {
                         bool rulePassed = CheckRule(rule, structure, out string ruleMessage);
+                        result.Evidence.Add(ruleMessage);
+
                         if (!rulePassed)
+                        {
                             allRulesPassed = false;
-
-                        evidence.Add(ruleMessage);
+                            result.Passed = false;
+                            result.Message = "Критерий не выполнен";
+                        }
                     }
-
-                    result.Passed = allRulesPassed;
-                    result.Message = allRulesPassed ? "✅ Критерий выполнен" : "❌ Критерий не выполнен";
-                    result.Evidence = evidence;
                 }
                 catch (Exception ex)
                 {
+                    result.Passed = false;
                     result.Message = $"Ошибка проверки критерия: {ex.Message}";
-                    result.Evidence = new List<string> { $"Исключение: {ex.Message}" };
+                    result.Evidence.Add($"Исключение: {ex.Message}");
                 }
 
                 results.Add(result);
@@ -231,62 +232,67 @@ namespace CodeAnalyzerAPI.Controllers
             int actualValue = GetPropertyValue(rule.Property, structure);
 
             int expectedValue = 0;
-            if (rule.Value != null)
+            if (!string.IsNullOrEmpty(rule.Value))
             {
-                if (rule.Value is int intValue)
+                if (!int.TryParse(rule.Value, out expectedValue))
                 {
-                    expectedValue = intValue;
-                }
-                else if (rule.Value is string stringValue)
-                {
-                    int.TryParse(stringValue, out expectedValue);
-                }
-                else
-                {
-                    int.TryParse(rule.Value.ToString(), out expectedValue);
+                    message = $"Некорректное значение: {rule.Value}";
+                    return false;
                 }
             }
+
+            bool passed = false;
 
             switch (rule.Operator.ToLower())
             {
                 case "equals":
+                    passed = actualValue == expectedValue;
                     message = $"{rule.Property}: {actualValue} == {expectedValue}";
-                    return actualValue == expectedValue;
+                    break;
 
                 case "greater_than":
+                    passed = actualValue > expectedValue;
                     message = $"{rule.Property}: {actualValue} > {expectedValue}";
-                    return actualValue > expectedValue;
+                    break;
 
                 case "greater_than_or_equal":
+                    passed = actualValue >= expectedValue;
                     message = $"{rule.Property}: {actualValue} >= {expectedValue}";
-                    return actualValue >= expectedValue;
+                    break;
 
                 case "less_than":
+                    passed = actualValue < expectedValue;
                     message = $"{rule.Property}: {actualValue} < {expectedValue}";
-                    return actualValue < expectedValue;
+                    break;
 
                 case "less_than_or_equal":
+                    passed = actualValue <= expectedValue;
                     message = $"{rule.Property}: {actualValue} <= {expectedValue}";
-                    return actualValue <= expectedValue;
+                    break;
 
                 case "exists":
+                    passed = actualValue > 0;
                     message = $"{rule.Property}: {actualValue} (должен существовать)";
-                    return actualValue > 0;
+                    break;
 
                 default:
+                    passed = false;
                     message = $"Неизвестный оператор: {rule.Operator}";
-                    return false;
+                    break;
             }
+
+            return passed;
         }
 
         private int GetPropertyValue(string property, ProjectStructure structure)
         {
             return property.ToLower() switch
             {
-                "controllers_count" or "controllers" => structure.TotalControllers,
+                "controllers_count" or "controllers" => GetControllersWithoutBase(structure),
                 "controllers_count_excluding_base" => GetControllersExcludingBase(structure),
                 "controllers_count_excluding_base_abstract" => GetControllersExcludingBaseAbstract(structure),
                 "controllers_count_excluding_specific" => GetControllersExcludingSpecific(structure),
+                "controllers_without_base" => GetControllersWithoutBase(structure),
                 "pages_count" or "pages" => structure.TotalPages,
                 "dbcontext_count" or "dbcontext" => structure.DbContexts.Count,
                 "migrations_count" or "migrations" => structure.Migrations.Count,
@@ -295,6 +301,15 @@ namespace CodeAnalyzerAPI.Controllers
                 _ => 0
             };
         }
+
+        private int GetControllersWithoutBase(ProjectStructure structure)
+        {
+            return structure.Controllers.Count(c =>
+                !c.Name.Contains("BaseController", StringComparison.OrdinalIgnoreCase) &&
+                !c.Name.Contains("Base", StringComparison.OrdinalIgnoreCase) &&
+                c.Type != FileType.BaseController); 
+        }
+
 
         private int GetControllersExcludingBase(ProjectStructure structure)
         {
@@ -367,28 +382,43 @@ namespace CodeAnalyzerAPI.Controllers
             }
         }
         private async Task<string> GetAIAnalysis(
-            List<AnalysisCriteria> criteria,
-            List<CriteriaCheckResult> results,
-            ProjectStructure structure,
-            string customPrompt)
+    List<AnalysisCriteria> criteria,
+    List<CriteriaCheckResult> results,
+    ProjectStructure structure,
+    string customPrompt)
         {
             try
             {
+                int GetControllersWithoutBase()
+                {
+                    return structure.Controllers.Count(c =>
+                        !c.Name.Contains("BaseController", StringComparison.OrdinalIgnoreCase) &&
+                        !c.Name.Contains("Base", StringComparison.OrdinalIgnoreCase));
+                }
+
                 var basePrompt = $"""
                 СТРУКТУРА ПРОЕКТА:
                 - Файлов: {structure.TotalFiles}
-                - Контроллеров: {structure.TotalControllers}
+                - Контроллеров (без BaseController): {GetControllersWithoutBase()}
+                - Всего файлов контроллеров: {structure.TotalControllers}
+                - Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
                 - Страниц: {structure.TotalPages}
                 - DbContext: {structure.DbContexts.Count}
                 - Миграций: {structure.Migrations.Count}
-                - Имена контроллеров: {string.Join(", ", structure.Controllers.Select(c => c.Name))}
-                - Имена файлов: {string.Join(", ", structure.Files.Select(f => f.Name).Take(10))}...
 
                 КРИТЕРИИ ПРОВЕРКИ:
-                 {string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
+                {string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
 
                 РЕЗУЛЬТАТЫ ПРОВЕРКИ:
                 {string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
+
+                ДЕТАЛИ ПРОВЕРКИ:
+                {string.Join("\n", results.SelectMany(r => r.Evidence.Select(e => $"- {r.CriteriaName}: {e}")))}
+
+                ОБЩАЯ СТАТИСТИКА:
+                - Всего критериев: {results.Count}
+                - Выполнено: {results.Count(r => r.Passed)}
+                - Не выполнено: {results.Count(r => !r.Passed)}
                 """;
 
                 string finalPrompt;
@@ -396,26 +426,30 @@ namespace CodeAnalyzerAPI.Controllers
                 if (!string.IsNullOrEmpty(customPrompt))
                 {
                     finalPrompt = $"""
-                {basePrompt}
+            {basePrompt}
 
-                ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
-                {customPrompt}
+            ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
+            {customPrompt}
 
-                ЗАДАЧА: Проанализируй проект согласно критериям и дополнительной инструкции пользователя.
-                """;
+            ЗАДАЧА: Проанализируй проект согласно критериям и дополнительной инструкции пользователя. 
+            Обрати внимание на реальные результаты проверки критериев выше.
+            """;
                 }
                 else
                 {
                     finalPrompt = $"""
-                {basePrompt}
+            {basePrompt}
 
-                ЗАДАЧА: Дай краткий итог по проверке критериев. Только факты, без лишнего анализа.
+            ЗАДАЧА: Дай краткий итог по проверке критериев на основе РЕАЛЬНЫХ РЕЗУЛЬТАТОВ проверки выше. 
+            Не придумывай свои результаты - используй только те, что указаны в РЕЗУЛЬТАТАХ ПРОВЕРКИ.
 
-                Формат ответа:
-                ✅ Выполнено: X критериев
-                ❌ Не выполнено: Y критериев
-                Основные проблемы: [перечисли проблемы]
-                """;
+            Формат ответа должен соответствовать реальным результатам:
+            ✅ Выполнено: X критериев (если есть выполненные)
+            ❌ Не выполнено: Y критериев (если есть невыполненные)
+            Основные проблемы: [перечисли реальные проблемы из результатов проверки]
+
+            ВАЖНО: Не меняй фактические результаты проверки!
+            """;
                 }
 
                 _logger.LogInformation(

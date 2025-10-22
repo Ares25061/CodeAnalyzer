@@ -11,13 +11,16 @@ namespace CodeAnalyzerLibrary
         public CriteriaType Type { get; set; }
         public List<CriteriaRule> Rules { get; set; } = new List<CriteriaRule>();
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public string UserId { get; set; } = string.Empty;
+        public bool IsCustom { get; set; }
+        public bool Selected { get; set; } = true;
     }
 
     public class CriteriaRule
     {
         public string Property { get; set; } = string.Empty;
         public string Operator { get; set; } = "exists";
-        public object Value { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
         public string ErrorMessage { get; set; } = string.Empty;
     }
 
@@ -34,5 +37,25 @@ namespace CodeAnalyzerLibrary
     {
         Structural,
         FullContent
+    }
+
+    public class CustomCriteriaRequest
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public CriteriaType Type { get; set; }
+        public List<CriteriaRule> Rules { get; set; } = new List<CriteriaRule>();
+    }
+
+    public class UserCriteria
+    {
+        public string UserId { get; set; } = string.Empty;
+        public List<AnalysisCriteria> Criteria { get; set; } = new List<AnalysisCriteria>();
+    }
+    public class CustomCriteriaResponse
+    {
+        public bool Success { get; set; }
+        public List<AnalysisCriteria> Criteria { get; set; } = new List<AnalysisCriteria>();
+        public string Error { get; set; } = string.Empty;
     }
 }
