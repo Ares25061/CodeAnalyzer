@@ -1,7 +1,6 @@
 ﻿@page "/"
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
-@inject NavigationManager Navigation
 
 <div class="analyzer-page">
     <div class="container analyzer-container">
@@ -9,16 +8,10 @@
             <div class="header-title">
                 <h3>Анализатор проекта с критериями</h3>
             </div>
-            <div class="header-actions">
-                <button class="btn btn-info manage-criteria-btn" @onclick="NavigateToCriteriaManagement">
-                    <i class="bi bi-gear"></i> Управление критериями
-                </button>
-                <button class="clear-history-btn" @onclick="ClearAnalysisHistory" title="Очистить историю">
-                    <i class="bi bi-trash"></i>
-                </button>
-            </div>
+            <button class="clear-history-btn" @onclick="ClearAnalysisHistory" title="Очистить историю">
+                <i class="bi bi-trash"></i>
+            </button>
         </div>
-
         <div class="input-form">
             <div class="form-group">
                 <label>Путь к папке проекта:</label>
@@ -48,38 +41,15 @@
             </div>
 
             <div class="form-group">
-                <div class="criteria-header">
-                    <label>Критерии проверки:</label>
-                    <button class="btn btn-sm btn-outline-primary" @onclick="LoadAvailableCriteria" title="Обновить список критериев">
-                        <i class="bi bi-arrow-clockwise"></i>
-                    </button>
-                </div>
+                <label>Критерии проверки:</label>
                 <div class="criteria-list">
-                    @if (availableCriteria?.Any() == true)
+                    @foreach (var criterion in availableCriteria)
                     {
-                        @foreach (var criterion in availableCriteria)
-                        {
-                            <div class="criterion-item">
-                                <input type="checkbox"
-                                       @bind="criterion.Selected"
-                                       id="@criterion.Id" />
-                                <label for="@criterion.Id">@criterion.Name</label>
-                                @if (!string.IsNullOrEmpty(criterion.Description))
-                                {
-                                    <span class="criterion-tooltip" title="@criterion.Description">
-                                        <i class="bi bi-info-circle"></i>
-                                    </span>
-                                }
-                            </div>
-                        }
-                    }
-                    else
-                    {
-                        <div class="no-criteria">
-                            <p>Нет доступных критериев</p>
-                            <button class="btn btn-sm btn-primary" @onclick="NavigateToCriteriaManagement">
-                                Создать критерии
-                            </button>
+                        <div class="criterion-item">
+                            <input type="checkbox"
+                                   @bind="criterion.Selected"
+                                   id="@criterion.Id" />
+                            <label for="@criterion.Id">@criterion.Name</label>
                         </div>
                     }
                 </div>
@@ -104,13 +74,6 @@
                 <div class="status-info">
                     <div class="spinner"></div>
                     <span>Проверка подключения к AI...</span>
-                </div>
-            }
-            @if (isLoadingCriteria)
-            {
-                <div class="status-info">
-                    <div class="spinner"></div>
-                    <span>Загрузка критериев...</span>
                 </div>
             }
         </div>
@@ -250,10 +213,6 @@
             <button @onclick="AnalyzeStructureOnly" disabled="@isAnalyzing" class="btn btn-secondary">
                 📁 Только структура
             </button>
-
-            <button @onclick="NavigateToCriteriaManagement" class="btn btn-info">
-                ⚙️ Управление критериями
-            </button>
         </div>
     </div>
 </div>
@@ -266,15 +225,22 @@
     private string customPrompt = string.Empty;
     private bool isAnalyzing = false;
     private bool isCheckingConnection = false;
-    private bool isLoadingCriteria = false;
     private bool useOllama = true;
 
-    private List<CriteriaOption> availableCriteria = new();
+    private List<CriteriaOption> availableCriteria = new()
+    {
+        new CriteriaOption { Id = "controllers", Name = "Наличие контроллеров", Selected = true },
+        new CriteriaOption { Id = "min_controllers", Name = "Минимум 3 контроллера", Selected = false },
+        new CriteriaOption { Id = "pages", Name = "Наличие страниц", Selected = true },
+        new CriteriaOption { Id = "min_pages", Name = "Минимум 2 страницы", Selected = false },
+        new CriteriaOption { Id = "migrations", Name = "Наличие миграций", Selected = false },
+        new CriteriaOption { Id = "dbcontext", Name = "Наличие DbContext", Selected = false },
+        new CriteriaOption { Id = "services", Name = "Наличие сервисов", Selected = false }
+    };
 
     protected override async Task OnInitializedAsync()
     {
         await LoadAnalysisHistory();
-        await LoadAvailableCriteria();
     }
 
     private async Task LoadAnalysisHistory()
@@ -302,69 +268,6 @@
         }
     }
 
-    private async Task LoadAvailableCriteria()
-    {
-        isLoadingCriteria = true;
-        StateHasChanged();
-
-        try
-        {
-            // Загружаем сохраненные критерии из API
-            var response = await Http.GetFromJsonAsync<CriteriaListResponse>("https://localhost:7131/api/criteriamanagement/templates");
-
-            if (response?.Success == true && response.Templates?.Any() == true)
-            {
-                // Преобразуем шаблоны в CriteriaOption
-                availableCriteria = response.Templates
-                    .Where(t => t.IsActive) // Только активные критерии
-                    .Select(t => new CriteriaOption
-                        {
-                            Id = t.Id,
-                            Name = t.Name,
-                            Description = t.Description,
-                            Selected = false
-                        })
-                    .ToList();
-
-                // Добавляем базовые критерии, если нет сохраненных
-                if (!availableCriteria.Any())
-                {
-                    availableCriteria = GetDefaultCriteria();
-                }
-            }
-            else
-            {
-                // Используем базовые критерии, если API недоступно
-                availableCriteria = GetDefaultCriteria();
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Ошибка при загрузке критериев: {ex.Message}");
-            // Используем базовые критерии в случае ошибки
-            availableCriteria = GetDefaultCriteria();
-        }
-        finally
-        {
-            isLoadingCriteria = false;
-            StateHasChanged();
-        }
-    }
-
-    private List<CriteriaOption> GetDefaultCriteria()
-    {
-        return new List<CriteriaOption>
-        {
-            new CriteriaOption { Id = "controllers", Name = "Наличие контроллеров", Description = "Проверяет наличие контроллеров в проекте", Selected = true },
-            new CriteriaOption { Id = "min_controllers", Name = "Минимум 3 контроллера", Description = "Проверяет, что в проекте не менее 3 контроллеров", Selected = false },
-            new CriteriaOption { Id = "pages", Name = "Наличие страниц", Description = "Проверяет наличие Razor/Blazor страниц", Selected = true },
-            new CriteriaOption { Id = "min_pages", Name = "Минимум 2 страницы", Description = "Проверяет, что в проекте не менее 2 страниц", Selected = false },
-            new CriteriaOption { Id = "migrations", Name = "Наличие миграций", Description = "Проверяет наличие миграций Entity Framework", Selected = false },
-            new CriteriaOption { Id = "dbcontext", Name = "Наличие DbContext", Description = "Проверяет наличие классов DbContext", Selected = false },
-            new CriteriaOption { Id = "services", Name = "Наличие сервисов", Description = "Проверяет наличие сервисных классов", Selected = false }
-        };
-    }
-
     private async Task SaveAnalysisHistory()
     {
         try
@@ -390,87 +293,64 @@
         StateHasChanged();
     }
 
-    private void NavigateToCriteriaManagement()
-    {
-        Navigation.NavigateTo("/criteria-management");
-    }
-
     private List<AnalysisCriteria> GetSelectedCriteria()
     {
         var criteria = new List<AnalysisCriteria>();
 
         foreach (var option in availableCriteria.Where(o => o.Selected))
         {
-            // Для кастомных критериев загружаем полную информацию
-            if (option.Id.StartsWith("custom_") || !GetDefaultCriteria().Any(d => d.Id == option.Id))
-            {
-                // Здесь можно загрузить полную информацию о кастомном критерии
-                // Пока используем базовые правила
-                var criterion = CreateBasicCriterion(option);
-                criteria.Add(criterion);
-            }
-            else
-            {
-                // Базовые критерии
-                var criterion = CreateBasicCriterion(option);
-                criteria.Add(criterion);
-            }
+            var criterion = new AnalysisCriteria
+                {
+                    Id = option.Id,
+                    Name = option.Name,
+                    Description = option.Name,
+                    Type = CriteriaType.Structural,
+                    CreatedAt = DateTime.UtcNow,
+                    Rules = new List<CriteriaRule>()
+                };
+
+            criterion.Rules.Add(new CriteriaRule
+                {
+                    Property = option.Id switch
+                    {
+                        "controllers" => "controllers_count",
+                        "min_controllers" => "controllers_count",
+                        "pages" => "pages_count",
+                        "min_pages" => "pages_count",
+                        "migrations" => "migrations_count",
+                        "dbcontext" => "dbcontext_count",
+                        "services" => "services_count",
+                        _ => option.Id
+                    },
+                    Operator = option.Id switch
+                    {
+                        "min_controllers" => "greater_than_or_equal",
+                        "min_pages" => "greater_than_or_equal",
+                        _ => "exists"
+                    },
+                    Value = option.Id switch
+                    {
+                        "min_controllers" => 3,
+                        "min_pages" => 2,
+                        _ => 1
+                    },
+                    ErrorMessage = option.Id switch
+                    {
+                        "controllers" => "Контроллеры не найдены",
+                        "min_controllers" => "Недостаточно контроллеров (требуется минимум 3)",
+                        "pages" => "Страницы не найдены",
+                        "min_pages" => "Недостаточно страниц (требуется минимум 2)",
+                        "migrations" => "Миграции не найдены",
+                        "dbcontext" => "DbContext не найден",
+                        "services" => "Сервисы не найдены",
+                        _ => "Критерий не выполнен"
+                    }
+                });
+
+            criteria.Add(criterion);
         }
 
         return criteria;
-    }
-
-    private AnalysisCriteria CreateBasicCriterion(CriteriaOption option)
-    {
-        var criterion = new AnalysisCriteria
-            {
-                Id = option.Id,
-                Name = option.Name,
-                Description = option.Description ?? option.Name,
-                Type = CriteriaType.Structural,
-                CreatedAt = DateTime.UtcNow,
-                Rules = new List<CriteriaRule>()
-            };
-
-        // Базовые правила для стандартных критериев
-        var rule = new CriteriaRule
-            {
-                Property = option.Id switch
-                {
-                    "controllers" or "min_controllers" => "controllers_count",
-                    "pages" or "min_pages" => "pages_count",
-                    "migrations" => "migrations_count",
-                    "dbcontext" => "dbcontext_count",
-                    "services" => "services_count",
-                    _ => "files_count"
-                },
-                Operator = option.Id switch
-                {
-                    "min_controllers" => "greater_than_or_equal",
-                    "min_pages" => "greater_than_or_equal",
-                    _ => "exists"
-                },
-                Value = option.Id switch
-                {
-                    "min_controllers" => 3,
-                    "min_pages" => 2,
-                    _ => 1
-                },
-                ErrorMessage = option.Id switch
-                {
-                    "controllers" => "Контроллеры не найдены",
-                    "min_controllers" => "Недостаточно контроллеров (требуется минимум 3)",
-                    "pages" => "Страницы не найдены",
-                    "min_pages" => "Недостаточно страниц (требуется минимум 2)",
-                    "migrations" => "Миграции не найдены",
-                    "dbcontext" => "DbContext не найден",
-                    "services" => "Сервисы не найдены",
-                    _ => "Критерий не выполнен"
-                }
-            };
-
-        criterion.Rules.Add(rule);
-        return criterion;
     }
 
     private async Task<bool> CheckOllamaConnection()
@@ -737,6 +617,7 @@
         return formatted;
     }
 }
+}
 
 <style>
     .analyzer-container {
@@ -752,18 +633,6 @@
         margin-bottom: 20px;
         padding-bottom: 15px;
         border-bottom: 2px solid #e9ecef;
-    }
-
-    .header-actions {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-    }
-
-    .manage-criteria-btn {
-        display: flex;
-        align-items: center;
-        gap: 5px;
     }
 
     .header-title h3 {
@@ -784,19 +653,12 @@
         margin-bottom: 20px;
     }
 
-    .criteria-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 8px;
-    }
-
-    .form-group label {
-        font-weight: 600;
-        color: #495057;
-        margin-bottom: 8px;
-        display: block;
-    }
+        .form-group label {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 8px;
+            display: block;
+        }
 
     .form-control {
         width: 100%;
@@ -828,13 +690,12 @@
     .criterion-item {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 10px 12px;
+        gap: 10px;
+        padding: 8px 12px;
         background: white;
         border-radius: 6px;
         border: 1px solid #e9ecef;
         transition: all 0.2s ease;
-        position: relative;
     }
 
         .criterion-item:hover {
@@ -844,26 +705,6 @@
 
         .criterion-item input[type="checkbox"] {
             transform: scale(1.2);
-        }
-
-    .criterion-tooltip {
-        color: #6c757d;
-        cursor: help;
-        margin-left: auto;
-    }
-
-    .no-criteria {
-        grid-column: 1 / -1;
-        text-align: center;
-        padding: 20px;
-        background: #f8f9fa;
-        border-radius: 6px;
-        border: 2px dashed #dee2e6;
-    }
-
-        .no-criteria p {
-            margin-bottom: 10px;
-            color: #6c757d;
         }
 
     .analysis-history {
@@ -1098,17 +939,6 @@
             background: linear-gradient(135deg, #545b62, #3d4246);
             transform: translateY(-1px);
             box-shadow: 0 4px 8px rgba(108, 117, 125, 0.3);
-        }
-
-    .btn-info {
-        background: linear-gradient(135deg, #17a2b8, #138496);
-        color: white;
-    }
-
-        .btn-info:hover:not(:disabled) {
-            background: linear-gradient(135deg, #138496, #117a8b);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(23, 162, 184, 0.3);
         }
 
     .btn:disabled {

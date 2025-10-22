@@ -15,7 +15,6 @@ namespace CodeAnalyzerAPI
 
             builder.Services.AddSwaggerGen(c =>
             {
-                // Включаем XML-комментарии
                 var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
                 var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
 
