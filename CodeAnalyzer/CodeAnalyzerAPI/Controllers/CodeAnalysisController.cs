@@ -25,37 +25,6 @@ namespace CodeAnalyzerAPI.Controllers
             _structureAnalyzer = structureAnalyzer ?? throw new ArgumentNullException(nameof(structureAnalyzer));
         }
 
-        /// <summary>
-        /// Полный анализ кодовой базы проекта с проверкой критериев и AI-анализом
-        /// </summary>
-        /// <remarks>
-        /// Пример запроса:
-        ///
-        ///     POST /api/codeanalyzer/analyze
-        ///     {
-        ///       "folderPath": "C:/Projects/MyProject",
-        ///       "useOllama": true,
-        ///       "customPrompt": "Проанализируй архитектуру проекта",
-        ///       "extensions": [".cs", ".razor", ".json"],
-        ///       "criteria": [
-        ///         {
-        ///           "id": 1,
-        ///           "name": "Проверка контроллеров",
-        ///           "description": "Должно быть не менее 2 контроллеров",
-        ///           "rules": [
-        ///             {
-        ///               "property": "controllers_count",
-        ///               "operator": "greater_than_or_equal",
-        ///               "value": 2
-        ///             }
-        ///           ]
-        ///         }
-        ///       ]
-        ///     }
-        ///
-        /// </remarks>
-        /// <param name="request">Запрос на анализ проекта</param>
-        /// <returns>Результаты анализа структуры, проверки критериев и AI-анализ</returns>
         [HttpPost("analyze")]
         public async Task<IActionResult> Analyze([FromBody] AnalysisRequest request)
         {
@@ -98,7 +67,8 @@ namespace CodeAnalyzerAPI.Controllers
                         dbContexts = structure.DbContexts.Count,
                         services = structure.Services.Count,
                         controllerNames = structure.Controllers.Select(c => c.Name).ToList(),
-                        fileNames = structure.Files.Select(f => f.Name).ToList()
+                        fileNames = structure.Files.Select(f => f.Name).ToList(),
+                        folderStructure = GetFolderStructure(structure.ProjectPath)
                     },
                     criteriaResults = criteriaResults,
                     aiAnalysis = aiAnalysis,
@@ -120,21 +90,6 @@ namespace CodeAnalyzerAPI.Controllers
             }
         }
 
-        /// <summary>
-        /// Анализ только структуры проекта без проверки критериев
-        /// </summary>
-        /// <remarks>
-        /// Пример запроса:
-        ///
-        ///     POST /api/codeanalyzer/analyze-structure
-        ///     {
-        ///       "folderPath": "C:/Projects/MyProject",
-        ///       "extensions": [".cs", ".razor", ".cshtml"]
-        ///     }
-        ///
-        /// </remarks>
-        /// <param name="request">Запрос на анализ структуры</param>
-        /// <returns>Детальная информация о структуре проекта</returns>
         [HttpPost("analyze-structure")]
         public async Task<IActionResult> AnalyzeStructureOnly([FromBody] StructureAnalysisRequest request)
         {
@@ -155,6 +110,7 @@ namespace CodeAnalyzerAPI.Controllers
                 {
                     success = true,
                     structure = structure,
+                    folderStructure = GetFolderStructure(structure.ProjectPath),
                     summary = new
                     {
                         totalFiles = structure.TotalFiles,
@@ -307,9 +263,8 @@ namespace CodeAnalyzerAPI.Controllers
             return structure.Controllers.Count(c =>
                 !c.Name.Contains("BaseController", StringComparison.OrdinalIgnoreCase) &&
                 !c.Name.Contains("Base", StringComparison.OrdinalIgnoreCase) &&
-                c.Type != FileType.BaseController); 
+                c.Type != FileType.BaseController);
         }
-
 
         private int GetControllersExcludingBase(ProjectStructure structure)
         {
@@ -334,16 +289,7 @@ namespace CodeAnalyzerAPI.Controllers
                 !excludedNames.Any(name =>
                     c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
         }
-        /// <summary>
-        /// Проверка подключения к Ollama и работоспособности AI-модели
-        /// </summary>
-        /// <remarks>
-        /// Пример запроса:
-        ///
-        ///     GET /api/codeanalyzer/check-connection
-        ///
-        /// </remarks>
-        /// <returns>Результат проверки подключения</returns>
+
         [HttpGet("check-connection")]
         public async Task<IActionResult> CheckConnection()
         {
@@ -381,11 +327,12 @@ namespace CodeAnalyzerAPI.Controllers
                 });
             }
         }
+
         private async Task<string> GetAIAnalysis(
-    List<AnalysisCriteria> criteria,
-    List<CriteriaCheckResult> results,
-    ProjectStructure structure,
-    string customPrompt)
+            List<AnalysisCriteria> criteria,
+            List<CriteriaCheckResult> results,
+            ProjectStructure structure,
+            string customPrompt)
         {
             try
             {
@@ -405,17 +352,19 @@ namespace CodeAnalyzerAPI.Controllers
                 - Страниц: {structure.TotalPages}
                 - DbContext: {structure.DbContexts.Count}
                 - Миграций: {structure.Migrations.Count}
+                - Структура папок: 
+                {GetFolderStructure(structure.ProjectPath)}
 
                 КРИТЕРИИ ПРОВЕРКИ:
                 {string.Join("\n", criteria.Select(c => $"- {c.Name}: {c.Description}"))}
 
-                РЕЗУЛЬТАТЫ ПРОВЕРКИ:
+                РЕЗУЛЬТАТЫ ПРОВЕРКИ КРИТЕРИЕВ:
                 {string.Join("\n", results.Select(r => $"- {r.CriteriaName}: {(r.Passed ? "✅ ВЫПОЛНЕНО" : "❌ НЕ ВЫПОЛНЕНО")}"))}
 
-                ДЕТАЛИ ПРОВЕРКИ:
+                ДЕТАЛИ ПРОВЕРКИ КРИТЕРИЕВ:
                 {string.Join("\n", results.SelectMany(r => r.Evidence.Select(e => $"- {r.CriteriaName}: {e}")))}
 
-                ОБЩАЯ СТАТИСТИКА:
+                ОБЩАЯ СТАТИСТИКА КРИТЕРИЕВ:
                 - Всего критериев: {results.Count}
                 - Выполнено: {results.Count(r => r.Passed)}
                 - Не выполнено: {results.Count(r => !r.Passed)}
@@ -426,30 +375,43 @@ namespace CodeAnalyzerAPI.Controllers
                 if (!string.IsNullOrEmpty(customPrompt))
                 {
                     finalPrompt = $"""
-            {basePrompt}
+                    {basePrompt}
 
-            ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
-            {customPrompt}
+                    ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ ДЛЯ АНАЛИЗА:
+                    {customPrompt}
 
-            ЗАДАЧА: Проанализируй проект согласно критериям и дополнительной инструкции пользователя. 
-            Обрати внимание на реальные результаты проверки критериев выше.
-            """;
+                    ЗАДАЧА: 
+                    1. Проанализируй проект согласно критериям выше
+                    2. Выполни дополнительную инструкцию пользователя как отдельную задачу
+                    3. Проверь наличие элементов, упомянутых в инструкции, в структуре проекта
+                    4. Дай развернутый ответ, включающий как результаты проверки критериев, так и анализ по кастомной инструкции
+
+                    ФОРМАТ ОТВЕТА:
+                    📊 РЕЗУЛЬТАТЫ ПРОВЕРКИ КРИТЕРИЕВ:
+                    [здесь кратко результаты по критериям]
+
+                    🎯 АНАЛИЗ ПО КАСТОМНОЙ ИНСТРУКЦИИ:
+                    [здесь подробный анализ по дополнительной инструкции пользователя]
+
+                    💡 ОБЩИЕ ВЫВОДЫ:
+                    [здесь общие выводы и рекомендации]
+                    """;
                 }
                 else
                 {
                     finalPrompt = $"""
-            {basePrompt}
+                    {basePrompt}
 
-            ЗАДАЧА: Дай краткий итог по проверке критериев на основе РЕАЛЬНЫХ РЕЗУЛЬТАТОВ проверки выше. 
-            Не придумывай свои результаты - используй только те, что указаны в РЕЗУЛЬТАТАХ ПРОВЕРКИ.
+                    ЗАДАЧА: Дай краткий итог по проверке критериев на основе РЕАЛЬНЫХ РЕЗУЛЬТАТОВ проверки выше. 
+                    Не придумывай свои результаты - используй только те, что указаны в РЕЗУЛЬТАТАХ ПРОВЕРКИ.
 
-            Формат ответа должен соответствовать реальным результатам:
-            ✅ Выполнено: X критериев (если есть выполненные)
-            ❌ Не выполнено: Y критериев (если есть невыполненные)
-            Основные проблемы: [перечисли реальные проблемы из результатов проверки]
+                    Формат ответа должен соответствовать реальным результатам:
+                    ✅ Выполнено: X критериев (если есть выполненные)
+                    ❌ Не выполнено: Y критериев (если есть невыполненные)
+                    Основные проблемы: [перечисли реальные проблемы из результатов проверки]
 
-            ВАЖНО: Не меняй фактические результаты проверки!
-            """;
+                    ВАЖНО: Не меняй фактические результаты проверки!
+                    """;
                 }
 
                 _logger.LogInformation(
@@ -467,6 +429,73 @@ namespace CodeAnalyzerAPI.Controllers
             {
                 _logger.LogError(ex, "Ошибка при AI-анализе");
                 return $"Ошибка AI-анализа: {ex.Message}";
+            }
+        }
+
+        private string GetFolderStructure(string projectPath)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                AppendDirectoryTree(projectPath, "", sb, 0);
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Ошибка при получении структуры папок: {Message}", ex.Message);
+                return $"Не удалось получить структуру папок: {ex.Message}";
+            }
+        }
+
+        private void AppendDirectoryTree(string path, string indent, StringBuilder sb, int level)
+        {
+            if (level > 5) return;
+
+            try
+            {
+                var directories = Directory.GetDirectories(path);
+                var files = Directory.GetFiles(path);
+
+                foreach (var directory in directories.OrderBy(d => d))
+                {
+                    var dirName = Path.GetFileName(directory);
+                    sb.AppendLine($"{indent}📁 {dirName}/");
+                    AppendDirectoryTree(directory, indent + "  ", sb, level + 1);
+                }
+
+                foreach (var file in files.OrderBy(f => f).Take(50))
+                {
+                    var fileName = Path.GetFileName(file);
+                    var fileExtension = Path.GetExtension(file).ToLower();
+
+                    var icon = fileExtension switch
+                    {
+                        ".cs" => "🔷",
+                        ".razor" => "🌀",
+                        ".cshtml" => "🌐",
+                        ".json" => "📋",
+                        ".config" => "⚙️",
+                        ".csproj" => "📦",
+                        ".sln" => "💼",
+                        ".dll" => "📄",
+                        _ => "📄"
+                    };
+
+                    sb.AppendLine($"{indent}{icon} {fileName}");
+                }
+
+                if (files.Length > 50)
+                {
+                    sb.AppendLine($"{indent}... и еще {files.Length - 50} файлов");
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                sb.AppendLine($"{indent}🚫 Нет доступа к папке");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"{indent}❌ Ошибка: {ex.Message}");
             }
         }
     }

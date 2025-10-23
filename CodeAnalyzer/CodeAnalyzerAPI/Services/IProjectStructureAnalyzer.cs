@@ -47,8 +47,8 @@ namespace CodeAnalyzerAPI.Services
                 await AnalyzeFileStructure(fullPath, extensions, structure, readContent);
                 await FindDatabaseConfigurations(structure);
 
-                _logger.LogInformation("Анализ завершен. Найдено: {FilesCount} файлов, {ControllersCount} контроллеров, {DbContextsCount} DbContext, {MigrationsCount} миграций",
-                    structure.Files.Count, structure.Controllers.Count, structure.DbContexts.Count, structure.Migrations.Count);
+                _logger.LogInformation("Анализ завершен. Найдено: {FilesCount} файлов, {ControllersCount} контроллеров, {PagesCount} страниц, {DbContextsCount} DbContext, {MigrationsCount} миграций",
+                    structure.Files.Count, structure.Controllers.Count, structure.Pages.Count, structure.DbContexts.Count, structure.Migrations.Count);
 
                 return structure;
             }
@@ -83,7 +83,11 @@ namespace CodeAnalyzerAPI.Services
                     Directory = Path.GetDirectoryName(relativePath) ?? string.Empty
                 };
 
-                if (readContent)
+                bool shouldReadContent = readContent ||
+                                       projectFile.Extension == ".razor" ||
+                                       projectFile.Extension == ".cshtml";
+
+                if (shouldReadContent)
                 {
                     try
                     {
@@ -94,7 +98,8 @@ namespace CodeAnalyzerAPI.Services
                         _logger.LogWarning("Не удалось прочитать файл {FilePath}: {Message}", filePath, ex.Message);
                     }
                 }
-                await DetermineFileTypeAsync(projectFile, structure, readContent);
+
+                await DetermineFileTypeAsync(projectFile, structure, shouldReadContent);
                 structure.Files.Add(projectFile);
             }
         }
@@ -119,7 +124,7 @@ namespace CodeAnalyzerAPI.Services
             {
                 result.DetectedTypes.Add(FileType.BaseController);
                 file.FoundPatterns.Add("Базовый контроллер");
-                result.Confidence = 0.3; 
+                result.Confidence = 0.3;
             }
             else if (file.Name.EndsWith("controller.cs", StringComparison.OrdinalIgnoreCase) ||
                     (file.Name.Contains("Controller") && file.Extension == ".cs" && !file.Name.Contains("Base")))
@@ -128,6 +133,7 @@ namespace CodeAnalyzerAPI.Services
                 file.FoundPatterns.Add("Имя файла содержит 'Controller'");
                 result.Confidence = 0.9;
             }
+
             if (file.Name.EndsWith("Context.cs", StringComparison.OrdinalIgnoreCase) &&
                 file.Extension == ".cs")
             {
@@ -142,6 +148,7 @@ namespace CodeAnalyzerAPI.Services
                 file.FoundPatterns.Add("Имя файла содержит 'Context'");
                 result.Confidence = Math.Max(result.Confidence, 0.7);
             }
+
             if ((file.Directory?.Contains("Migration", StringComparison.OrdinalIgnoreCase) == true ||
                  file.Name.Contains("Migration", StringComparison.OrdinalIgnoreCase)) &&
                 file.Extension == ".cs")
@@ -157,12 +164,13 @@ namespace CodeAnalyzerAPI.Services
                 file.FoundPatterns.Add("Главный файл Program.cs");
                 result.Confidence = 1.0;
             }
+
             if (file.Extension == ".razor" || file.Extension == ".cshtml")
             {
-                result.DetectedTypes.Add(FileType.Page);
-                file.FoundPatterns.Add("Файл Razor/Blazor");
-                result.Confidence = Math.Max(result.Confidence, 0.95);
+                file.FoundPatterns.Add("Файл Razor/Blazor (требуется проверка содержимого)");
+                result.Confidence = 0.3;
             }
+
             if (file.Name.Contains("appsettings", StringComparison.OrdinalIgnoreCase) ||
                 file.Extension == ".json" || file.Extension == ".config")
             {
@@ -170,6 +178,7 @@ namespace CodeAnalyzerAPI.Services
                 file.FoundPatterns.Add("Конфигурационный файл");
                 result.Confidence = Math.Max(result.Confidence, 0.9);
             }
+
             if (file.Name.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase) ||
                 (file.Directory?.Contains("Service", StringComparison.OrdinalIgnoreCase) == true &&
                  file.Extension == ".cs"))
@@ -183,6 +192,7 @@ namespace CodeAnalyzerAPI.Services
         private async Task DetectByContentAsync(ProjectFile file, FileDetectionResult result)
         {
             var content = file.Content;
+
             if (content.Contains("abstract class") &&
                 (content.Contains("ControllerBase") || content.Contains("Controller")))
             {
@@ -230,6 +240,47 @@ namespace CodeAnalyzerAPI.Services
                     result.Confidence = Math.Max(result.Confidence, 0.98);
                 }
             }
+
+            if (file.Extension == ".razor" || file.Extension == ".cshtml")
+            {
+                bool isRealPage = await IsRealPageAsync(file, content);
+
+                if (isRealPage)
+                {
+                    if (!result.DetectedTypes.Contains(FileType.Page))
+                    {
+                        result.DetectedTypes.Add(FileType.Page);
+                        file.FoundPatterns.Add("Настоящая страница (содержит @page)");
+                        result.Confidence = Math.Max(result.Confidence, 0.95);
+                    }
+                }
+                else
+                {
+                    file.FoundPatterns.Add("Файл Razor/Blazor (не страница - нет @page)");
+                }
+            }
+        }
+
+        private async Task<bool> IsRealPageAsync(ProjectFile file, string content)
+        {
+            var pageDirectivePatterns = new[]
+            {
+                @"^\s*@page\s",
+                @"^\s*@page\s+""[^""]*""",
+                @"^\s*@page\s+""[^""]*""\s+.*$",
+                @"@page\s*$",
+                @"^\s*@page\s*\r?\n"
+            };
+
+            foreach (var pattern in pageDirectivePatterns)
+            {
+                if (Regex.IsMatch(content, pattern, RegexOptions.Multiline | RegexOptions.IgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void AddToCollections(ProjectFile file, ProjectStructure structure, List<FileType> detectedTypes)
@@ -306,6 +357,7 @@ namespace CodeAnalyzerAPI.Services
                                 }
                             }
                         }
+
                         var migrationPatterns = new[]
                         {
                             @"Database\.Migrate\(\)",

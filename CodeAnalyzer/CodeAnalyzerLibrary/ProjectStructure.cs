@@ -26,7 +26,6 @@ namespace CodeAnalyzerLibrary
         public bool OllamaAvailable { get; set; }
         public string OllamaStatus { get; set; } = "Не проверено";
 
-        // Новые методы для улучшенной фильтрации
         public int GetControllersExcludingBase()
         {
             var excludedKeywords = new[] { "base" };

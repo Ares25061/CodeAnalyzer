@@ -44,6 +44,10 @@
                 @if (analysisMode == "Structural")
                 {
                     <small class="form-text text-muted">Доступно только в полном режиме анализа</small>
+                    @if (!string.IsNullOrEmpty(customPrompt))
+                    {
+                        <small class="form-text text-warning">⚠️ Кастомный промпт не будет использован в структурном режиме</small>
+                    }
                 }
             </div>
 
@@ -155,7 +159,7 @@
                             <p><strong>Режим:</strong> @message.Mode</p>
                             <p><strong>Критерии:</strong> @string.Join(", ", message.Criteria)</p>
                             <p><strong>AI-анализ:</strong> @(message.UseOllama ? "Да" : "Нет")</p>
-                            @if (!string.IsNullOrEmpty(message.CustomPrompt))
+                            @if (!string.IsNullOrEmpty(message.CustomPrompt) && message.UseOllama)
                             {
                                 <p><strong>Кастомный промпт:</strong> @message.CustomPrompt</p>
                             }
@@ -1175,6 +1179,10 @@
         font-size: 1rem;
     }
 
+    .text-warning {
+        color: #dc3545 !important;
+        font-weight: 500;
+    }
     .result-item {
         padding: 20px;
         margin-bottom: 15px;
