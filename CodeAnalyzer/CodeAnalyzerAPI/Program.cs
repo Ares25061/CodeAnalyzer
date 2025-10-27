@@ -34,6 +34,7 @@ namespace CodeAnalyzerAPI
             builder.Services.AddScoped<IProjectStructureAnalyzer, ProjectStructureAnalyzer>();
             builder.Services.AddScoped<ICriteriaValidator, CriteriaValidator>();
             builder.Services.AddScoped<ICustomCriteriaService, CustomCriteriaService>();
+            builder.Services.AddScoped<IWordDocumentAnalyzer, WordDocumentAnalyzer>();
 
             builder.Services.AddCors(options =>
             {

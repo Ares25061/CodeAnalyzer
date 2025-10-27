@@ -4,6 +4,8 @@ using CodeAnalyzerAPI.Services;
 using Ollama;
 using Microsoft.Extensions.Logging;
 using System.Text;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace CodeAnalyzerAPI.Controllers
 {
@@ -14,17 +16,50 @@ namespace CodeAnalyzerAPI.Controllers
         private readonly OllamaApiClient _ollama;
         private readonly ILogger<CodeAnalyzerController> _logger;
         private readonly IProjectStructureAnalyzer _structureAnalyzer;
+        private readonly IWordDocumentAnalyzer _wordAnalyzer;
 
         public CodeAnalyzerController(
             OllamaApiClient ollama,
             ILogger<CodeAnalyzerController> logger,
-            IProjectStructureAnalyzer structureAnalyzer)
+            IProjectStructureAnalyzer structureAnalyzer,
+            IWordDocumentAnalyzer wordAnalyzer)
         {
             _ollama = ollama ?? throw new ArgumentNullException(nameof(ollama));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _structureAnalyzer = structureAnalyzer ?? throw new ArgumentNullException(nameof(structureAnalyzer));
+            _wordAnalyzer = wordAnalyzer ?? throw new ArgumentNullException(nameof(wordAnalyzer));
         }
-
+        /// <summary>
+        /// Полный анализ кодовой базы проекта с проверкой критериев и AI-анализом
+        /// </summary>
+        /// <remarks>
+        /// Пример запроса:
+        ///
+        ///     POST /api/codeanalyzer/analyze
+        ///     {
+        ///       "folderPath": "C:/Projects/MyProject",
+        ///       "useOllama": true,
+        ///       "customPrompt": "Проанализируй архитектуру проекта",
+        ///       "extensions": [".cs", ".razor", ".json"],
+        ///       "criteria": [
+        ///         {
+        ///           "id": 1,
+        ///           "name": "Проверка контроллеров",
+        ///           "description": "Должно быть не менее 2 контроллеров",
+        ///           "rules": [
+        ///             {
+        ///               "property": "controllers_count",
+        ///               "operator": "greater_than_or_equal",
+        ///               "value": 2
+        ///             }
+        ///           ]
+        ///         }
+        ///       ]
+        ///     }
+        ///
+        /// </remarks>
+        /// <param name="request">Запрос на анализ проекта</param>
+        /// <returns>Результаты анализа структуры, проверки критериев и AI-анализ</returns>
         [HttpPost("analyze")]
         public async Task<IActionResult> Analyze([FromBody] AnalysisRequest request)
         {
@@ -90,6 +125,21 @@ namespace CodeAnalyzerAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Анализ только структуры проекта без проверки критериев
+        /// </summary>
+        /// <remarks>
+        /// Пример запроса:
+        ///
+        ///     POST /api/codeanalyzer/analyze-structure
+        ///     {
+        ///       "folderPath": "C:/Projects/MyProject",
+        ///       "extensions": [".cs", ".razor", ".cshtml"]
+        ///     }
+        ///
+        /// </remarks>
+        /// <param name="request">Запрос на анализ структуры</param>
+        /// <returns>Детальная информация о структуре проекта</returns>
         [HttpPost("analyze-structure")]
         public async Task<IActionResult> AnalyzeStructureOnly([FromBody] StructureAnalysisRequest request)
         {
@@ -182,8 +232,173 @@ namespace CodeAnalyzerAPI.Controllers
 
             return results;
         }
+            /// <summary>
+            /// Анализ Word документа с проверкой форматирования и структуры
+            /// </summary>
+            [HttpPost("analyze-word")]
+            public async Task<IActionResult> AnalyzeWordDocument([FromBody] WordAnalysisRequest request)
+            {
+                _logger.LogInformation("Получен запрос на анализ Word документа: {FilePath}", request.FilePath);
 
-        private bool CheckRule(CriteriaRule rule, ProjectStructure structure, out string message)
+                if (string.IsNullOrWhiteSpace(request.FilePath))
+                {
+                    return BadRequest(new { success = false, error = "Путь к файлу обязателен" });
+                }
+
+                if (!System.IO.File.Exists(request.FilePath))
+                {
+                    return BadRequest(new { success = false, error = "Файл не существует" });
+                }
+
+                var extension = Path.GetExtension(request.FilePath).ToLower();
+                if (extension != ".doc" && extension != ".docx")
+                {
+                    return BadRequest(new { success = false, error = "Поддерживаются только файлы .doc и .docx" });
+                }
+
+                try
+                {
+                    // Анализ форматирования документа
+                    var formattingResult = await _wordAnalyzer.AnalyzeDocumentFormattingAsync(request.FilePath, request.FormattingRules);
+
+                    // Извлечение текста для AI-анализа
+                    var documentText = await _wordAnalyzer.ExtractDocumentTextAsync(request.FilePath);
+
+                    string aiAnalysis = string.Empty;
+                    if (request.UseOllama && !string.IsNullOrEmpty(documentText))
+                    {
+                        aiAnalysis = await GetWordDocumentAIAnalysis(documentText, formattingResult, request);
+                    }
+
+                    var response = new
+                    {
+                        success = true,
+                        documentInfo = new
+                        {
+                            fileName = Path.GetFileName(request.FilePath),
+                            fileSize = new FileInfo(request.FilePath).Length,
+                            pagesCount = formattingResult.PagesCount,
+                            paragraphsCount = formattingResult.ParagraphsCount,
+                            sectionsCount = formattingResult.SectionsCount
+                        },
+                        formattingAnalysis = formattingResult,
+                        aiAnalysis = aiAnalysis,
+                        summary = new
+                        {
+                            totalFormattingChecks = formattingResult.FormattingChecks.Count,
+                            passedFormattingChecks = formattingResult.FormattingChecks.Count(c => c.Passed),
+                            failedFormattingChecks = formattingResult.FormattingChecks.Count(c => !c.Passed),
+                            hasStructureIssues = formattingResult.StructureIssues.Any(),
+                            structureIssuesCount = formattingResult.StructureIssues.Count
+                        }
+                    };
+
+                    return Ok(response);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Ошибка при анализе Word документа: {FilePath}", request.FilePath);
+                    return StatusCode(500, new { success = false, error = ex.Message });
+                }
+            }
+
+            private async Task<string> GetWordDocumentAIAnalysis(
+                string documentText,
+                WordDocumentAnalysisResult formattingResult,
+                WordAnalysisRequest request)
+            {
+                try
+                {
+                    var expectedFont = request.FormattingRules?.ExpectedFont ?? "Times New Roman";
+                    var expectedFontSize = request.FormattingRules?.ExpectedFontSize ?? 14;
+                    var expectedLineSpacing = request.FormattingRules?.ExpectedLineSpacing ?? 1.5;
+
+                    var basePrompt = $"""
+                АНАЛИЗ WORD ДОКУМЕНТА
+
+                ТЕКСТ ДОКУМЕНТА (первые 4000 символов):
+                {(documentText.Length > 4000 ? documentText.Substring(0, 4000) : documentText)}
+
+                РЕЗУЛЬТАТЫ ПРОВЕРКИ ФОРМАТИРОВАНИЯ:
+                - Шрифт: {formattingResult.ActualFont} (ожидается: {expectedFont})
+                - Размер шрифта: {formattingResult.ActualFontSize:F1} (ожидается: {expectedFontSize})
+                - Межстрочный интервал: {formattingResult.ActualLineSpacing:F1} (ожидается: {expectedLineSpacing:F1})
+                - Отступы абзацев: {(formattingResult.HasParagraphIndents ? "✅ Присутствуют" : "❌ Отсутствуют")}
+
+                ПРОВЕРКИ ФОРМАТИРОВАНИЯ:
+                {string.Join("\n", formattingResult.FormattingChecks.Select(c => $"- {c.CheckName}: {(c.Passed ? "✅" : "❌")} {c.Message}"))}
+
+                ПРОБЛЕМЫ СТРУКТУРЫ:
+                {(formattingResult.StructureIssues.Any() ? string.Join("\n", formattingResult.StructureIssues) : "✅ Проблемы не обнаружены")}
+
+                ТРЕБОВАНИЯ К АНАЛИЗУ:
+                - Проверка структуры: {(request.StructureRules?.CheckStructure == true ? "Да" : "Нет")}
+                - Наличие примеров: {(request.StructureRules?.RequireExamples == true ? "Требуется" : "Не требуется")}
+                - Проверка разделов: {(request.StructureRules?.CheckSections == true ? "Да" : "Нет")}
+                """;
+
+                    string finalPrompt;
+
+                    if (!string.IsNullOrEmpty(request.CustomPrompt))
+                    {
+                        finalPrompt = $"""
+                    {basePrompt}
+
+                    ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ПОЛЬЗОВАТЕЛЯ:
+                    {request.CustomPrompt}
+
+                    ЗАДАЧА АНАЛИЗА:
+                    1. Проанализируй содержание документа на соответствие академическим/научным стандартам
+                    2. Проверь логическую структуру и последовательность изложения
+                    3. Оцени наличие примеров, аргументов и доказательств
+                    4. Проверь соответствие формальным требованиям (на основе результатов проверки форматирования)
+                    5. Выполни дополнительную инструкцию пользователя
+
+                    ФОРМАТ ОТВЕТА:
+                    📊 РЕЗУЛЬТАТЫ ПРОВЕРКИ ФОРМАТИРОВАНИЯ:
+                    [краткое резюме по форматированию]
+
+                    🏗️ АНАЛИЗ СТРУКТУРЫ:
+                    [анализ структуры документа]
+
+                    📝 СОДЕРЖАТЕЛЬНЫЙ АНАЛИЗ:
+                    [анализ содержания и стиля]
+
+                    💡 РЕКОМЕНДАЦИИ:
+                    [конкретные рекомендации по улучшению]
+                    """;
+                    }
+                    else
+                    {
+                        finalPrompt = $"""
+                    {basePrompt}
+
+                    ЗАДАЧА: Проведи комплексный анализ документа как академической работы. 
+                    Оцени структуру, содержание, соответствие формальным требованиям.
+                    Дай конкретные рекомендации по улучшению.
+
+                    ФОРМАТ ОТВЕТА:
+                    - Соответствие формальным требованиям
+                    - Качество структуры
+                    - Содержательная часть
+                    - Рекомендации
+                    """;
+                    }
+
+                    var response = await _ollama.Completions.GenerateCompletionAsync(
+                        model: "deepseek-v3.1:671b-cloud",
+                        prompt: finalPrompt,
+                        stream: false);
+
+                    return response.Response?.Trim() ?? "Не удалось получить анализ документа";
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Ошибка при AI-анализе Word документа");
+                    return $"Ошибка AI-анализа документа: {ex.Message}";
+                }
+            }
+            private bool CheckRule(CriteriaRule rule, ProjectStructure structure, out string message)
         {
             int actualValue = GetPropertyValue(rule.Property, structure);
 
@@ -290,6 +505,16 @@ namespace CodeAnalyzerAPI.Controllers
                     c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
         }
 
+        /// <summary>
+        /// Проверка подключения к Ollama и работоспособности AI-модели
+        /// </summary>
+        /// <remarks>
+        /// Пример запроса:
+        ///
+        ///     GET /api/codeanalyzer/check-connection
+        ///
+        /// </remarks>
+        /// <returns>Результат проверки подключения</returns>
         [HttpGet("check-connection")]
         public async Task<IActionResult> CheckConnection()
         {

@@ -6,144 +6,260 @@
     <div class="container analyzer-container">
         <div class="analyzer-header">
             <div class="header-title">
-                <h3>Анализатор проекта с критериями</h3>
+                <h3>Анализатор проекта и Word документов</h3>
             </div>
             <button class="clear-history-btn" @onclick="ClearAnalysisHistory" title="Очистить историю">
                 <i class="bi bi-trash"></i>
             </button>
         </div>
 
-        <div class="input-form">
-            <div class="form-group">
-                <label>Путь к папке проекта:</label>
-                <input @bind="folderPath" placeholder="Введите путь к папке..." class="form-control" />
-            </div>
+        <div class="analysis-tabs">
+            <button class="@(activeTab == "project" ? "tab-active" : "tab")" @onclick='() => SwitchTab("project")'>
+                📁 Анализ проекта
+            </button>
+            <button class="@(activeTab == "word" ? "tab-active" : "tab")" @onclick='() => SwitchTab("word")'>
+                📄 Анализ Word документов
+            </button>
+        </div>
 
-            <div class="form-group">
-                <label>Режим анализа:</label>
-                <select @bind="analysisMode" class="form-control">
-                    <option value="Structural">Структурный (быстрый)</option>
-                    <option value="FullContent">Полный (с анализом содержимого)</option>
-                </select>
-                <small class="form-text text-muted">
+        @if (activeTab == "project")
+        {
+            <div class="input-form">
+                <div class="form-group">
+                    <label>Путь к папке проекта:</label>
+                    <input @bind="folderPath" placeholder="Введите путь к папке..." class="form-control" />
+                </div>
+
+                <div class="form-group">
+                    <label>Режим анализа:</label>
+                    <select @bind="analysisMode" class="form-control">
+                        <option value="Structural">Структурный (быстрый)</option>
+                        <option value="FullContent">Полный (с анализом содержимого)</option>
+                    </select>
+                    <small class="form-text text-muted">
+                        @if (analysisMode == "Structural")
+                        {
+                            <span>🤖 AI-анализ отключен в структурном режиме</span>
+                        }
+                        else
+                        {
+                            <span>🤖 AI-анализ автоматически включен в полном режиме</span>
+                        }
+                    </small>
+                </div>
+
+                <div class="form-group">
+                    <label>Кастомный промпт для AI:</label>
+                    <textarea @bind="customPrompt" placeholder="Введите дополнительную инструкцию для AI-анализа..."
+                              class="form-control" rows="3" disabled="@(analysisMode == "Structural")"></textarea>
                     @if (analysisMode == "Structural")
                     {
-                        <span>🤖 AI-анализ отключен в структурном режиме</span>
+                        <small class="form-text text-muted">Доступно только в полном режиме анализа</small>
+                        @if (!string.IsNullOrEmpty(customPrompt))
+                        {
+                            <small class="form-text text-warning">⚠️ Кастомный промпт не будет использован в структурном режиме</small>
+                        }
                     }
-                    else
-                    {
-                        <span>🤖 AI-анализ автоматически включен в полном режиме</span>
-                    }
-                </small>
+                </div>
+
+                <div class="form-group">
+                    <label>Критерии проверки:</label>
+                    <div class="criteria-section">
+                        <div class="criteria-tabs">
+                            <button class="@(showStandardCriteria ? "tab-active" : "tab")" @onclick="ShowStandardCriteria">
+                                Стандартные
+                            </button>
+                            <button class="@(!showStandardCriteria ? "tab-active" : "tab")" @onclick="ShowCustomCriteria">
+                                Мои критерии (@customUserCriteria.Count)
+                            </button>
+                            <button class="btn btn-secondary" @onclick="ShowCustomCriteriaModal" style="margin-left: auto;">
+                                + Создать критерий
+                            </button>
+                        </div>
+
+                        @if (showStandardCriteria)
+                        {
+                            <div class="criteria-list">
+                                @foreach (var criterion in standardCriteria)
+                                {
+                                    <div class="criterion-item">
+                                        <input type="checkbox"
+                                               @bind="criterion.Selected"
+                                               id="@($"std_{criterion.Id}")" />
+                                        <label for="@($"std_{criterion.Id}")">@criterion.Name</label>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="criteria-list">
+                                @if (customUserCriteria.Any())
+                                {
+                                    @foreach (var criterion in customUserCriteria)
+                                    {
+                                        <div class="criterion-item custom-criterion">
+                                            <div class="criterion-header">
+                                                <input type="checkbox"
+                                                       @bind="criterion.Selected"
+                                                       id="@($"custom_{criterion.Id}")" />
+                                                <label for="@($"custom_{criterion.Id}")">
+                                                    <span class="custom-badge">Пользовательский</span>
+                                                    @criterion.Name
+                                                </label>
+                                                <div class="criterion-actions">
+                                                    <button class="btn-icon" @onclick="() => EditCustomCriteria(criterion)" title="Редактировать">
+                                                        ✏️
+                                                    </button>
+                                                    <button class="btn-icon btn-danger" @onclick="() => DeleteCustomCriteria(criterion.Id)" title="Удалить">
+                                                        🗑️
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="no-criteria">
+                                        <p>У вас пока нет кастомных критериев</p>
+                                        <button class="btn btn-primary" @onclick="ShowCustomCriteriaModal">
+                                            Создать первый критерий
+                                        </button>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Расширения файлов (через запятую):</label>
+                    <input @bind="extensionsInput" placeholder=".cs,.razor,.cshtml,.json" class="form-control" />
+                </div>
             </div>
 
-            <div class="form-group">
-                <label>Кастомный промпт для AI:</label>
-                <textarea @bind="customPrompt" placeholder="Введите дополнительную инструкцию для AI-анализа..."
-                          class="form-control" rows="3" disabled="@(analysisMode == "Structural")"></textarea>
-                @if (analysisMode == "Structural")
+            <div class="analysis-status">
+                @if (isAnalyzing)
                 {
-                    <small class="form-text text-muted">Доступно только в полном режиме анализа</small>
-                    @if (!string.IsNullOrEmpty(customPrompt))
-                    {
-                        <small class="form-text text-warning">⚠️ Кастомный промпт не будет использован в структурном режиме</small>
-                    }
+                    <div class="status-info">
+                        <div class="spinner"></div>
+                        <span>Анализ проекта выполняется...</span>
+                    </div>
+                }
+                @if (isCheckingConnection)
+                {
+                    <div class="status-info">
+                        <div class="spinner"></div>
+                        <span>Проверка подключения к AI...</span>
+                    </div>
                 }
             </div>
 
-            <div class="form-group">
-                <label>Критерии проверки:</label>
-                <div class="criteria-section">
-                    <div class="criteria-tabs">
-                        <button class="@(showStandardCriteria ? "tab-active" : "tab")" @onclick="ShowStandardCriteria">
-                            Стандартные
-                        </button>
-                        <button class="@(!showStandardCriteria ? "tab-active" : "tab")" @onclick="ShowCustomCriteria">
-                            Мои критерии (@customUserCriteria.Count)
-                        </button>
-                        <button class="btn btn-secondary" @onclick="ShowCustomCriteriaModal" style="margin-left: auto;">
-                            + Создать критерий
-                        </button>
-                    </div>
-
-                    @if (showStandardCriteria)
+            <div class="input-container">
+                <button @onclick="StartAnalysis" disabled="@isAnalyzing" class="btn btn-primary">
+                    @if (isAnalyzing)
                     {
-                        <div class="criteria-list">
-                            @foreach (var criterion in standardCriteria)
-                            {
-                                <div class="criterion-item">
-                                    <input type="checkbox"
-                                           @bind="criterion.Selected"
-                                           id="@($"std_{criterion.Id}")" />
-                                    <label for="@($"std_{criterion.Id}")">@criterion.Name</label>
-                                </div>
-                            }
-                        </div>
+                        <span>🔄 Анализируется...</span>
                     }
                     else
                     {
-                        <div class="criteria-list">
-                            @if (customUserCriteria.Any())
-                            {
-                                @foreach (var criterion in customUserCriteria)
-                                {
-                                    <div class="criterion-item custom-criterion">
-                                        <div class="criterion-header">
-                                            <input type="checkbox"
-                                                   @bind="criterion.Selected"
-                                                   id="@($"custom_{criterion.Id}")" />
-                                            <label for="@($"custom_{criterion.Id}")">
-                                                <span class="custom-badge">Пользовательский</span>
-                                                @criterion.Name
-                                            </label>
-                                            <div class="criterion-actions">
-                                                <button class="btn-icon" @onclick="() => EditCustomCriteria(criterion)" title="Редактировать">
-                                                    ✏️
-                                                </button>
-                                                <button class="btn-icon btn-danger" @onclick="() => DeleteCustomCriteria(criterion.Id)" title="Удалить">
-                                                    🗑️
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                }
-                            }
-                            else
-                            {
-                                <div class="no-criteria">
-                                    <p>У вас пока нет кастомных критериев</p>
-                                    <button class="btn btn-primary" @onclick="ShowCustomCriteriaModal">
-                                        Создать первый критерий
-                                    </button>
-                                </div>
-                            }
-                        </div>
+                        <span>🚀 Анализировать проект</span>
                     }
-                </div>
+                </button>
             </div>
+        }
 
-            <div class="form-group">
-                <label>Расширения файлов (через запятую):</label>
-                <input @bind="extensionsInput" placeholder=".cs,.razor,.cshtml,.json" class="form-control" />
-            </div>
-        </div>
-
-        <div class="analysis-status">
-            @if (isAnalyzing)
+        @if (activeTab == "word")
+{
+    <div class="input-form">
+        <div class="form-group">
+            <label>Выберите Word документ:</label>
+            <InputFile OnChange="HandleFileSelected" accept=".doc,.docx" class="form-control" />
+            @if (!string.IsNullOrEmpty(selectedFileName))
             {
-                <div class="status-info">
-                    <div class="spinner"></div>
-                    <span>Анализ выполняется...</span>
-                </div>
-            }
-            @if (isCheckingConnection)
-            {
-                <div class="status-info">
-                    <div class="spinner"></div>
-                    <span>Проверка подключения к AI...</span>
+                <div class="file-info">
+                    <small>✅ Выбран файл: @selectedFileName</small>
                 </div>
             }
         </div>
+        <div class="formatting-rules">
+            <h4>Правила форматирования</h4>
+            <div class="rules-grid">
+                <div class="form-group">
+                    <label>Ожидаемый шрифт:</label>
+                    <select @bind="wordExpectedFont" class="form-control">
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Calibri">Calibri</option>
+                        <option value="Cambria">Cambria</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Размер шрифта:</label>
+                    <input type="number" @bind="wordExpectedFontSize" class="form-control" min="8" max="72" />
+                </div>
+                <div class="form-group">
+                    <label>Межстрочный интервал:</label>
+                    <input type="number" @bind="wordExpectedLineSpacing" step="0.1" class="form-control" min="1.0" max="3.0" />
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" @bind="wordRequireIndent" />
+                        Требовать отступы абзацев
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="structure-rules">
+            <h4>Правила структуры</h4>
+            <div class="rules-grid">
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" @bind="wordCheckStructure" />
+                        Проверять структуру документа
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" @bind="wordRequireExamples" />
+                        Требовать наличие примеров
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Кастомный промпт для AI:</label>
+            <textarea @bind="wordCustomPrompt" placeholder="Введите дополнительную инструкцию для анализа документа..."
+                      class="form-control" rows="3"></textarea>
+        </div>
+    </div>
+
+    <div class="analysis-status">
+        @if (isAnalyzingWord)
+        {
+            <div class="status-info">
+                <div class="spinner"></div>
+                <span>Анализ Word документа выполняется...</span>
+            </div>
+        }
+    </div>
+
+    <div class="input-container">
+        <button @onclick="AnalyzeWordDocument" disabled="@(isAnalyzingWord || string.IsNullOrEmpty(selectedFileName))" class="btn btn-primary">
+            @if (isAnalyzingWord)
+            {
+                <span>🔄 Анализируется...</span>
+            }
+            else
+            {
+                <span>📄 Анализировать Word документ</span>
+            }
+        </button>
+    </div>
+}
 
         <ul class="analysis-history">
             @foreach (var message in analysisHistory)
@@ -152,22 +268,88 @@
                     @if (message.Type == MessageType.User)
                     {
                         <div class="message-header">
-                            <strong>Запрос анализа:</strong>
+                            <strong>@(message.AnalysisType == "word" ? "Анализ Word документа" : "Запрос анализа проекта")</strong>
                         </div>
                         <div class="message-content">
-                            <p><strong>Папка:</strong> @message.FolderPath</p>
-                            <p><strong>Режим:</strong> @message.Mode</p>
-                            <p><strong>Критерии:</strong> @string.Join(", ", message.Criteria)</p>
-                            <p><strong>AI-анализ:</strong> @(message.UseOllama ? "Да" : "Нет")</p>
-                            @if (!string.IsNullOrEmpty(message.CustomPrompt) && message.UseOllama)
+                            @if (message.AnalysisType == "word")
                             {
-                                <p><strong>Кастомный промпт:</strong> @message.CustomPrompt</p>
+                                <p><strong>Файл:</strong> @message.FilePath</p>
+                                <p><strong>Шрифт:</strong> @message.ExpectedFont</p>
+                                <p><strong>Размер шрифта:</strong> @message.ExpectedFontSize</p>
+                                <p><strong>Интервал:</strong> @message.ExpectedLineSpacing</p>
+                                @if (!string.IsNullOrEmpty(message.CustomPrompt))
+                                {
+                                    <p><strong>Кастомный промпт:</strong> @message.CustomPrompt</p>
+                                }
+                            }
+                            else
+                            {
+                                <p><strong>Папка:</strong> @message.FolderPath</p>
+                                <p><strong>Режим:</strong> @message.Mode</p>
+                                <p><strong>Критерии:</strong> @string.Join(", ", message.Criteria)</p>
+                                <p><strong>AI-анализ:</strong> @(message.UseOllama ? "Да" : "Нет")</p>
+                                @if (!string.IsNullOrEmpty(message.CustomPrompt) && message.UseOllama)
+                                {
+                                    <p><strong>Кастомный промпт:</strong> @message.CustomPrompt</p>
+                                }
                             }
                         </div>
                     }
                     else
                     {
                         <div class="message-content formatted-content">
+                            @if (message.WordAnalysisResult != null)
+                            {
+                                <div class="word-analysis-result">
+                                    <h4>📊 Анализ Word документа</h4>
+
+                                    <div class="document-info">
+                                        <h5>Информация о документе:</h5>
+                                        <p>📄 Файл: @message.WordAnalysisResult.FileName</p>
+                                        <p>📝 Параграфов: @message.WordAnalysisResult.ParagraphsCount</p>
+                                        <p>📑 Страниц: @message.WordAnalysisResult.PagesCount</p>
+                                        <p>📚 Разделов: @message.WordAnalysisResult.SectionsCount</p>
+                                    </div>
+
+                                    <div class="formatting-results">
+                                        <h5>Результаты проверки форматирования:</h5>
+                                        @foreach (var check in message.WordAnalysisResult.FormattingChecks)
+                                        {
+                                            <div class="formatting-check @(check.Passed ? "passed" : "failed")">
+                                                <div class="check-header">
+                                                    <span class="check-name">@check.CheckName</span>
+                                                    <span class="check-status">@(check.Passed ? "✅" : "❌")</span>
+                                                </div>
+                                                <p class="check-message">@check.Message</p>
+                                                <div class="check-details">
+                                                    <span>Ожидалось: @check.ExpectedValue</span>
+                                                    <span>Фактически: @check.ActualValue</span>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+
+                                    @if (message.WordAnalysisResult.StructureIssues.Any())
+                                    {
+                                        <div class="structure-issues">
+                                            <h5>⚠️ Проблемы структуры:</h5>
+                                            <ul>
+                                                @foreach (var issue in message.WordAnalysisResult.StructureIssues)
+                                                {
+                                                    <li>@issue</li>
+                                                }
+                                            </ul>
+                                        </div>
+                                    }
+
+                                    <div class="summary-stats">
+                                        <span class="stat-passed">✅ Выполнено: @message.WordAnalysisResult.PassedChecks</span>
+                                        <span class="stat-failed">❌ Не выполнено: @message.WordAnalysisResult.FailedChecks</span>
+                                        <span class="stat-total">📋 Всего проверок: @message.WordAnalysisResult.TotalChecks</span>
+                                    </div>
+                                </div>
+                            }
+
                             @if (message.StructureSummary != null)
                             {
                                 <div class="structure-summary">
@@ -264,19 +446,6 @@
                 </li>
             }
         </ul>
-
-        <div class="input-container">
-            <button @onclick="StartAnalysis" disabled="@isAnalyzing" class="btn btn-primary">
-                @if (isAnalyzing)
-                {
-                    <span>🔄 Анализируется...</span>
-                }
-                else
-                {
-                    <span>🚀 Анализировать проект</span>
-                }
-            </button>
-        </div>
     </div>
 </div>
 
@@ -357,6 +526,19 @@
     private string newCriteriaDescription = string.Empty;
     private List<CriteriaRule> newCriteriaRules = new();
     private AnalysisCriteria editingCriteria = null;
+    private string activeTab = "project";
+    private IBrowserFile selectedFile;
+    private string selectedFileName = string.Empty;
+    private long maxFileSize = 1024 * 1024 * 10;
+    private string wordFilePath = string.Empty;
+    private string wordExpectedFont = "Times New Roman";
+    private int wordExpectedFontSize = 14;
+    private double wordExpectedLineSpacing = 1.5;
+    private bool wordRequireIndent = true;
+    private bool wordCheckStructure = true;
+    private bool wordRequireExamples = true;
+    private string wordCustomPrompt = string.Empty;
+    private bool isAnalyzingWord = false;
 
     private List<AnalysisCriteria> standardCriteria = new()
     {
@@ -445,13 +627,45 @@
             }
         }
     };
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
 
+        if (selectedFile != null)
+        {
+            if (selectedFile.Size > maxFileSize)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", "Файл слишком большой. Максимальный размер: 10MB");
+                selectedFile = null;
+                selectedFileName = string.Empty;
+            }
+            else
+            {
+                selectedFileName = selectedFile.Name;
+                var extension = Path.GetExtension(selectedFileName).ToLower();
+                if (extension != ".doc" && extension != ".docx")
+                {
+                    await JSRuntime.InvokeVoidAsync("alert", "Поддерживаются только файлы .doc и .docx");
+                    selectedFile = null;
+                    selectedFileName = string.Empty;
+                }
+            }
+        }
+
+        StateHasChanged();
+    }
     private List<AnalysisCriteria> customUserCriteria = new();
 
     protected override async Task OnInitializedAsync()
     {
         await LoadAnalysisHistory();
         await LoadCustomCriteria();
+    }
+
+    private void SwitchTab(string tab)
+    {
+        activeTab = tab;
+        StateHasChanged();
     }
 
     private async Task LoadCustomCriteria()
@@ -506,7 +720,7 @@
         {
             analysisHistory.Add(new AnalysisMessage
             {
-                Text = "Введите путь к папке проекта и выберите критерии для анализа.",
+                Text = "Введите путь к папке проекта или Word документу для анализа.",
                 Type = MessageType.Bot
             });
         }
@@ -530,7 +744,7 @@
         analysisHistory.Clear();
         analysisHistory.Add(new AnalysisMessage
         {
-            Text = "Введите путь к папке проекта и выберите критерии для анализа.",
+            Text = "Введите путь к папке проекта или Word документу для анализа.",
             Type = MessageType.Bot
         });
         await SaveAnalysisHistory();
@@ -749,7 +963,8 @@
             Criteria = selectedCriteria.Select(c => c.Name).ToList(),
             UseOllama = useOllama,
             CustomPrompt = customPrompt,
-            Timestamp = DateTime.Now.ToString("HH:mm:ss")
+            Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+            AnalysisType = "project"
         };
 
         analysisHistory.Add(userMessage);
@@ -827,6 +1042,169 @@
         }
     }
 
+    private async Task AnalyzeWordDocument()
+    {
+        if (selectedFile == null)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Выберите файл для анализа");
+            return;
+        }
+
+        isAnalyzingWord = true;
+        StateHasChanged();
+
+        try
+        {
+            var tempFilePath = await SaveFileToTempLocation(selectedFile);
+
+            var userMessage = new AnalysisMessage
+            {
+                Type = MessageType.User,
+                FilePath = selectedFileName,
+                ExpectedFont = wordExpectedFont,
+                ExpectedFontSize = wordExpectedFontSize.ToString(),
+                ExpectedLineSpacing = wordExpectedLineSpacing.ToString("F1"),
+                CustomPrompt = wordCustomPrompt,
+                Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                AnalysisType = "word"
+            };
+
+            analysisHistory.Add(userMessage);
+            await SaveAnalysisHistory();
+            StateHasChanged();
+
+            var request = new WordAnalysisRequest
+            {
+                FilePath = tempFilePath,
+                FormattingRules = new DocumentFormattingRules
+                {
+                    ExpectedFont = wordExpectedFont,
+                    ExpectedFontSize = wordExpectedFontSize,
+                    ExpectedLineSpacing = wordExpectedLineSpacing,
+                    RequireParagraphIndent = wordRequireIndent,
+                    AllowedFonts = new List<string> { wordExpectedFont }
+                },
+                StructureRules = new DocumentStructureRules
+                {
+                    CheckStructure = wordCheckStructure,
+                    RequireExamples = wordRequireExamples,
+                    CheckSections = true
+                },
+                UseOllama = true,
+                CustomPrompt = wordCustomPrompt
+            };
+
+            var response = await Http.PostAsJsonAsync("https://localhost:7131/api/codeanalyzer/analyze-word", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var resultJson = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<WordAnalysisResponse>(resultJson, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (result?.Success == true)
+                {
+                    var wordResult = new WordAnalysisResult
+                    {
+                        FileName = selectedFileName,
+                        ParagraphsCount = result.AnalysisResult.ParagraphsCount,
+                        PagesCount = result.AnalysisResult.PagesCount,
+                        SectionsCount = result.AnalysisResult.SectionsCount,
+                        FormattingChecks = result.AnalysisResult.FormattingChecks,
+                        StructureIssues = result.AnalysisResult.StructureIssues,
+                        PassedChecks = result.AnalysisResult.FormattingChecks.Count(c => c.Passed),
+                        FailedChecks = result.AnalysisResult.FormattingChecks.Count(c => !c.Passed),
+                        TotalChecks = result.AnalysisResult.FormattingChecks.Count
+                    };
+
+                    analysisHistory.Add(new AnalysisMessage
+                    {
+                        Type = MessageType.Bot,
+                        WordAnalysisResult = wordResult,
+                        AiAnalysis = result.AiAnalysis,
+                        Text = "Анализ Word документа завершен",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                    });
+                }
+                else
+                {
+                    analysisHistory.Add(new AnalysisMessage
+                    {
+                        Type = MessageType.Bot,
+                        Text = result?.Error ?? "Неизвестная ошибка",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                    });
+                }
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                analysisHistory.Add(new AnalysisMessage
+                {
+                    Type = MessageType.Bot,
+                    Text = $"❌ Ошибка сервера: {response.StatusCode}. {errorContent}",
+                    Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                });
+            }
+
+            await DeleteTempFile(tempFilePath);
+        }
+        catch (Exception ex)
+        {
+            analysisHistory.Add(new AnalysisMessage
+            {
+                Type = MessageType.Bot,
+                Text = $"❌ Ошибка при анализе Word документа: {ex.Message}",
+                Timestamp = DateTime.Now.ToString("HH:mm:ss")
+            });
+        }
+        finally
+        {
+            isAnalyzingWord = false;
+            await SaveAnalysisHistory();
+            StateHasChanged();
+        }
+    }
+    private async Task<string> SaveFileToTempLocation(IBrowserFile file)
+    {
+        try
+        {
+            var tempFolder = Path.Combine(Path.GetTempPath(), "CodeAnalyzer");
+            if (!Directory.Exists(tempFolder))
+            {
+                Directory.CreateDirectory(tempFolder);
+            }
+
+            var tempFileName = $"{Guid.NewGuid()}_{file.Name}";
+            var tempFilePath = Path.Combine(tempFolder, tempFileName);
+            await using var fileStream = new FileStream(tempFilePath, FileMode.Create);
+            await file.OpenReadStream(maxFileSize).CopyToAsync(fileStream);
+
+            return tempFilePath;
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Ошибка при сохранении файла: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteTempFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                await Task.Delay(100);
+                File.Delete(filePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при удалении временного файла: {ex.Message}");
+        }
+    }
     private string FormatMarkdown(string markdownText)
     {
         if (string.IsNullOrEmpty(markdownText))
@@ -843,7 +1221,242 @@
     }
 }
 
+
+
 <style>
+    .file-info {
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: #e7f3ff;
+        border-radius: 6px;
+        border: 1px solid #b3d9ff;
+    }
+
+        .file-info small {
+            color: #0066cc;
+            font-weight: 500;
+        }
+
+    input[type="file"] {
+        padding: 12px;
+        border: 2px dashed #dee2e6;
+        border-radius: 8px;
+        background: #f8f9fa;
+        width: 100%;
+    }
+
+        input[type="file"]:hover {
+            border-color: #007bff;
+            background: #e7f3ff;
+        }
+    .analysis-tabs {
+        display: flex;
+        background: white;
+        border-radius: 12px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        border: 1px solid #e1e5e9;
+        overflow: hidden;
+    }
+
+        .analysis-tabs .tab {
+            flex: 1;
+            padding: 20px;
+            background: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            color: #6c757d;
+            font-size: 1.1rem;
+        }
+
+        .analysis-tabs .tab-active {
+            flex: 1;
+            padding: 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .analysis-tabs .tab:hover:not(.tab-active) {
+            background: #e9ecef;
+        }
+
+    .formatting-rules, .structure-rules {
+        margin-bottom: 30px;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        border: 2px solid #e1e5e9;
+    }
+
+        .formatting-rules h4, .structure-rules h4 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+    .rules-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+    }
+
+    .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 500;
+        cursor: pointer;
+    }
+
+        .checkbox-label input[type="checkbox"] {
+            transform: scale(1.2);
+            accent-color: #007bff;
+        }
+
+    .word-analysis-result {
+        margin-bottom: 25px;
+        padding: 20px;
+        background: white;
+        border-radius: 8px;
+        border: 2px solid #e1e5e9;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+
+        .word-analysis-result h4 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-size: 1.25rem;
+            font-weight: 700;
+            border-bottom: 2px solid #f8f9fa;
+            padding-bottom: 12px;
+        }
+
+    .document-info {
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 8px;
+    }
+
+        .document-info h5 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #495057;
+            font-size: 1.1rem;
+        }
+
+    .formatting-results {
+        margin-bottom: 20px;
+    }
+
+        .formatting-results h5 {
+            margin-top: 0;
+            margin-bottom: 15px;
+            color: #495057;
+            font-size: 1.1rem;
+        }
+
+    .formatting-check {
+        padding: 15px;
+        margin-bottom: 10px;
+        border-radius: 8px;
+        border-left: 5px solid;
+        background: white;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e1e5e9;
+    }
+
+        .formatting-check.passed {
+            border-left-color: #28a745;
+            background: #f8fff9;
+        }
+
+        .formatting-check.failed {
+            border-left-color: #dc3545;
+            background: #fff8f8;
+        }
+
+    .check-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .check-name {
+        color: #2c3e50;
+        font-weight: 600;
+        flex: 1;
+    }
+
+    .check-status {
+        font-weight: bold;
+        font-size: 1rem;
+    }
+
+    .check-message {
+        margin: 0 0 10px 0;
+        color: #495057;
+        line-height: 1.5;
+    }
+
+    .check-details {
+        display: flex;
+        gap: 20px;
+        font-size: 0.875rem;
+        color: #6c757d;
+        flex-wrap: wrap;
+    }
+
+    .structure-issues {
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #fff3cd;
+        border-radius: 8px;
+        border-left: 4px solid #ffc107;
+    }
+
+        .structure-issues h5 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #856404;
+        }
+
+        .structure-issues ul {
+            margin: 0;
+            padding-left: 20px;
+            color: #856404;
+        }
+
+        .structure-issues li {
+            margin-bottom: 5px;
+        }
+
+    @@media (max-width: 768px) {
+        .analysis-tabs {
+            flex-direction: column;
+        }
+
+        .rules-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .check-details {
+            flex-direction: column;
+            gap: 5px;
+        }
+    }
     .analyzer-page {
         min-height: 100vh;
         background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
@@ -1183,6 +1796,7 @@
         color: #dc3545 !important;
         font-weight: 500;
     }
+
     .result-item {
         padding: 20px;
         margin-bottom: 15px;

@@ -11,6 +11,7 @@ namespace CodeAnalyzerLibrary
         public string Text { get; set; } = string.Empty;
         public MessageType Type { get; set; }
         public string FolderPath { get; set; } = string.Empty;
+        public string FilePath { get; set; } = string.Empty;
         public string Mode { get; set; } = string.Empty;
         public List<string> Criteria { get; set; } = new();
         public bool UseOllama { get; set; }
@@ -19,6 +20,24 @@ namespace CodeAnalyzerLibrary
         public List<CriteriaCheckResult> CriteriaResults { get; set; } = new();
         public string AiAnalysis { get; set; } = string.Empty;
         public string Timestamp { get; set; } = string.Empty;
+        public string AnalysisType { get; set; } = "project";
+        public string ExpectedFont { get; set; } = string.Empty;
+        public string ExpectedFontSize { get; set; } = string.Empty;
+        public string ExpectedLineSpacing { get; set; } = string.Empty;
+        public WordAnalysisResult WordAnalysisResult { get; set; }
+    }
+
+    public class WordAnalysisResult
+    {
+        public string FileName { get; set; } = string.Empty;
+        public int ParagraphsCount { get; set; }
+        public int PagesCount { get; set; }
+        public int SectionsCount { get; set; }
+        public List<FormattingCheckResult> FormattingChecks { get; set; } = new();
+        public List<string> StructureIssues { get; set; } = new();
+        public int PassedChecks { get; set; }
+        public int FailedChecks { get; set; }
+        public int TotalChecks { get; set; }
     }
 
     public class CriteriaOption
